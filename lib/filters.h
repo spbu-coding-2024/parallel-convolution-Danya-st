@@ -155,11 +155,5 @@ Filter get_filter(const char* name) {
     return filter_identity_3x3();
 }
 
-void print_filters(void) {
-    printf("Доступные фильтры:\n");
-    printf("  3×3: identity, blur3, gaussian3, edge, sharpen3, emboss, mean\n");
-    printf("  5×5: blur5, gaussian5, edge_h5, sharpen5\n");
-    printf("  9×9: motion9\n");
-}
 
 #endif

@@ -42,6 +42,10 @@ test: $(TEST_TARGET) | dirs
 clean:
 	rm -rf $(BUILD_DIR) $(OUTPUT_DIR)/*.png
 
+format-check:
+	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found"; exit 0; }
+	@clang-format --dry-run --Werror src/*.c src/*.h tests/*.c 2>/dev/null || \
+	(echo "Code formatting check failed. Run 'make format' to fix." && exit 1)
 
 help:
 	@echo "Доступные цели:"
