@@ -4,7 +4,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "../lib/stb_image_write.h"
 
-#include "filters.h"
+#include "../lib/filters.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
