@@ -1,0 +1,28 @@
+name: Task1 CI
+
+on:
+  push:
+    branches: [ "task1" ]
+  pull_request:
+    branches: [ "task1" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libpng-dev clang-format
+
+    - name: Build main executable
+      run: make
+
+    - name: Run property tests
+      run: make test
+
+    - name: Check code formatting
+      run: make format-check
