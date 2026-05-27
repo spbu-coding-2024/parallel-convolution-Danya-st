@@ -170,8 +170,7 @@ int main(int argc, char *argv[]) {
   Filter filter = get_filter(filter_name);
 
   int w, h, channels;
-  unsigned char *src =
-      stbi_load(argv[1], &w, &h, &channels, 1); // 1 = grayscale
+  unsigned char *src = stbi_load(argv[1], &w, &h, &channels, 1);
   if (!src) {
     fprintf(stderr, "Ошибка загрузки: %s\n", stbi_failure_reason());
     return 1;
@@ -184,7 +183,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  clock_t start_time = clock();
+  double start_time = omp_get_wtime();
   switch (mode) {
   case MODE_PIXEL:
     pixel_convolution(src, result, w, h, &filter);
@@ -201,11 +200,9 @@ int main(int argc, char *argv[]) {
   default:
     seq_convolution(src, result, w, h, &filter);
   }
-  clock_t end_time = clock();
-  double elapsed = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+  double end_time = omp_get_wtime();
+  double elapsed = (end_time - start_time);
   printf("время выполнения: %4f sec\n", elapsed);
-
-  // здесь делаем статистики
 
   stbi_write_png(argv[2], w, h, 1, result, w);
 
