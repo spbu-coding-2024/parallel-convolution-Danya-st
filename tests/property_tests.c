@@ -5,124 +5,13 @@
 #include <time.h>
 #include <omp.h>
 
-#define FILTER_WIDTH 3
-#define FILTER_HEIGHT 3
 
 #define EPSILON 1e-6
 #define TEST_IMG_W 64
 #define TEST_IMG_H 64
 
-double factor = 1.0;
-double bias = 0.0;
 
-static inline unsigned char clamp(double value) {
-  int v = (int)(factor * value + bias);
-  if (v < 0)
-    return 0;
-  if (v > 255)
-    return 255;
-  return (unsigned char)v;
-}
 
-void seq_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                     double kernel[FILTER_HEIGHT][FILTER_WIDTH]) {
-  for (int y = 0; y < h; ++y) {
-    for (int x = 0; x < w; ++x) {
-      double sum = 0.0;
-      for (int filterY = 0; filterY < FILTER_HEIGHT; ++filterY) {
-        for (int filterX = 0; filterX < FILTER_WIDTH; ++filterX) {
-          int ix = (x - FILTER_WIDTH / 2 + filterX + w) % w;
-          int iy = (y - FILTER_HEIGHT / 2 + filterY + h) % h;
-          sum += src[iy * w + ix] * kernel[filterY][filterX];
-        }
-      }
-      result[y * w + x] = clamp(sum);
-    }
-  }
-}
-
-void pixel_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                       double kernel[FILTER_HEIGHT][FILTER_WIDTH]) {
-  const long total = (long)w * h;
-#pragma omp parallel for
-  for (long idx = 0; idx < total; ++idx) {
-    int ox = (int)(idx % w);
-    int oy = (int)(idx / w);
-    double sum = 0.0;
-    for (int filterX = 0; filterX < FILTER_WIDTH; ++filterX)
-      for (int filterY = 0; filterY < FILTER_HEIGHT; ++filterY) {
-        int imageX = (ox - FILTER_WIDTH / 2 + filterX + w) % w;
-        int imageY = (oy - FILTER_HEIGHT / 2 + filterY + h) % h;
-        sum += src[imageY * w + imageX] * kernel[filterY][filterX];
-      }
-    result[idx] = clamp(sum);
-  }
-}
-
-void column_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                        double kernel[FILTER_HEIGHT][FILTER_WIDTH]) {
-#pragma omp parallel for
-  for (int x = 0; x < w; ++x)
-    for (int y = 0; y < h; ++y) {
-      double sum = 0.0;
-      for (int filterX = 0; filterX < FILTER_WIDTH; ++filterX)
-        for (int filterY = 0; filterY < FILTER_HEIGHT; ++filterY) {
-          int imageX = (x - FILTER_WIDTH / 2 + filterX + w) % w;
-          int imageY = (y - FILTER_HEIGHT / 2 + filterY + h) % h;
-          sum += src[imageY * w + imageX] * kernel[filterY][filterX];
-        }
-      result[y * w + x] = clamp(sum);
-    }
-}
-
-void row_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                     double kernel[FILTER_HEIGHT][FILTER_WIDTH]) {
-#pragma omp parallel for
-  for (int y = 0; y < h; ++y)
-    for (int x = 0; x < w; ++x) {
-      double sum = 0.0;
-      for (int filterX = 0; filterX < FILTER_WIDTH; ++filterX)
-        for (int filterY = 0; filterY < FILTER_HEIGHT; ++filterY) {
-          int imageX = (x - FILTER_WIDTH / 2 + filterX + w) % w;
-          int imageY = (y - FILTER_HEIGHT / 2 + filterY + h) % h;
-          sum += src[imageY * w + imageX] * kernel[filterY][filterX];
-        }
-      result[y * w + x] = clamp(sum);
-    }
-}
-
-void tile_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                      int TILE_W, int TILE_H,
-                      double kernel[FILTER_HEIGHT][FILTER_WIDTH]) {
-
-  int tiles_x = (w + TILE_W - 1) / TILE_W;
-  int tiles_y = (h + TILE_H - 1) / TILE_H;
-  int total_tiles = tiles_x * tiles_y;
-
-#pragma omp parallel for
-  for (int t = 0; t < total_tiles; ++t) {
-    int tx = t % tiles_x;
-    int ty = t / tiles_x;
-
-    int x0 = tx * TILE_W;
-    int y0 = ty * TILE_H;
-    int x1 = (x0 + TILE_W < w) ? x0 + TILE_W : w;
-    int y1 = (y0 + TILE_H < h) ? y0 + TILE_H : h;
-
-    for (int y = y0; y < y1; ++y) {
-      for (int x = x0; x < x1; ++x) {
-        double sum = 0.0;
-        for (int filterX = 0; filterX < FILTER_WIDTH; ++filterX)
-          for (int filterY = 0; filterY < FILTER_HEIGHT; ++filterY) {
-            int imageX = (x - FILTER_WIDTH / 2 + filterX + w) % w;
-            int imageY = (y - FILTER_HEIGHT / 2 + filterY + h) % h;
-            sum += src[imageY * w + imageX] * kernel[filterY][filterX];
-          }
-        result[y * w + x] = clamp(sum);
-      }
-    }
-  }
-}
 static unsigned char *make_random_image(int w, int h) {
   unsigned char *img = malloc(w * h);
   for (int i = 0; i < w * h; ++i)
