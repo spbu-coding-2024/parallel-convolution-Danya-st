@@ -58,7 +58,7 @@ static int test_identity() {
   Filter identity = make_filter(3);
   identity.kernel[1][1] = 1;
 
-  conv_seq(src, result, TEST_IMG_W, TEST_IMG_H, &identity);
+  seq_convolution(src, result, TEST_IMG_W, TEST_IMG_H, &identity);
   int pass = images_equal(src, result, TEST_IMG_W, TEST_IMG_H);
 
   free(src);
@@ -78,7 +78,7 @@ static int test_zero_filter() {
 
   Filter zero = make_filter(3);
 
-  conv_seq(src, result, TEST_IMG_W, TEST_IMG_H, &zero);
+  seq_convolution(src, result, TEST_IMG_W, TEST_IMG_H, &zero);
   int pass = image_is_constant(result, TEST_IMG_W, TEST_IMG_H, 0);
 
   free(src);
@@ -104,8 +104,8 @@ static int test_composition() {
   sr.kernel[1][2] = 1;
   sl.kernel[1][0] = 1;
 
-  conv_seq(src, tmp, w, h, &sr);
-  conv_seq(tmp, result, w, h, &sl);
+  seq_convolution(src, tmp, w, h, &sr);
+  seq_convolution(tmp, result, w, h, &sl);
   int pass = images_equal(src, result, w, h);
 
   free(src);
@@ -139,8 +139,8 @@ static int test_zero_padding() {
       for (int j = 0; j < 3; ++j)
         big.kernel[i + 1][j + 1] = small.kernel[i][j];
 
-    conv_seq(src, small_res, w, h, &small);
-    conv_seq(src, big_res, w, h, &big);
+    seq_convolution(src, small_res, w, h, &small);
+    seq_convolution(src, big_res, w, h, &big);
     pass = images_equal(small_res, big_res, w, h);
 
     free(src);
@@ -159,7 +159,7 @@ static int test_golden() {
                                       93, 90, 100, 97, 80, 77, 87, 83};
 
   Filter mean = get_filter("mean");
-  conv_seq(src, result, 4, 4, &mean);
+  seq_convolution(src, result, 4, 4, &mean);
   return images_equal(expected, result, 4, 4);
 }
 

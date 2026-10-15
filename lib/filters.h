@@ -1,7 +1,13 @@
 #ifndef FILTERS_H
 #define FILTERS_H
 
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+
+#ifndef MAX_FILTER_SIZE
 #define MAX_FILTER_SIZE 9
+#endif
 
 typedef struct {
   int size;
