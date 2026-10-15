@@ -11,12 +11,12 @@ typedef struct {
   const char *name;
 } Filter;
 
-Filter filter_identity_3x3(void) {
+static inline Filter filter_identity_3x3(void) {
   Filter f = {3, {{0, 0, 0}, {0, 1, 0}, {0, 0, 0}}, 1.0, 0.0, "identity_3x3"};
   return f;
 }
 
-Filter filter_blur_3x3(void) {
+static inline Filter filter_blur_3x3(void) {
   Filter f = {3,
               {{0.0, 0.2, 0.0}, {0.2, 0.2, 0.2}, {0.0, 0.2, 0.0}},
               1.0,
@@ -25,36 +25,36 @@ Filter filter_blur_3x3(void) {
   return f;
 }
 
-Filter filter_gaussian_3x3(void) {
+static inline Filter filter_gaussian_3x3(void) {
   Filter f = {
       3, {{1, 2, 1}, {2, 4, 2}, {1, 2, 1}}, 1.0 / 16.0, 0.0, "gaussian_3x3"};
   return f;
 }
 
-Filter filter_edge_3x3(void) {
+static inline Filter filter_edge_3x3(void) {
   Filter f = {
       3, {{-1, -1, -1}, {-1, 8, -1}, {-1, -1, -1}}, 1.0, 0.0, "edge_3x3"};
   return f;
 }
 
-Filter filter_sharpen_3x3(void) {
+static inline Filter filter_sharpen_3x3(void) {
   Filter f = {
       3, {{-1, -1, -1}, {-1, 9, -1}, {-1, -1, -1}}, 1.0, 0.0, "sharpen_3x3"};
   return f;
 }
 
-Filter filter_emboss_3x3(void) {
+static inline Filter filter_emboss_3x3(void) {
   Filter f = {
       3, {{-1, -1, 0}, {-1, 0, 1}, {0, 1, 1}}, 1.0, 128.0, "emboss_3x3"};
   return f;
 }
 
-Filter filter_mean_3x3(void) {
+static inline Filter filter_mean_3x3(void) {
   Filter f = {3, {{1, 1, 1}, {1, 1, 1}, {1, 1, 1}}, 1.0 / 9.0, 0.0, "mean_3x3"};
   return f;
 }
 
-Filter filter_blur_5x5(void) {
+static inline Filter filter_blur_5x5(void) {
   Filter f = {5,
               {{0, 0, 1, 0, 0},
                {0, 1, 1, 1, 0},
@@ -67,7 +67,7 @@ Filter filter_blur_5x5(void) {
   return f;
 }
 
-Filter filter_gaussian_5x5(void) {
+static inline Filter filter_gaussian_5x5(void) {
   Filter f = {5,
               {{1, 4, 6, 4, 1},
                {4, 16, 24, 16, 4},
@@ -80,7 +80,7 @@ Filter filter_gaussian_5x5(void) {
   return f;
 }
 
-Filter filter_edge_h_5x5(void) {
+static inline Filter filter_edge_h_5x5(void) {
   Filter f = {5,
               {{0, 0, -1, 0, 0},
                {0, 0, -1, 0, 0},
@@ -93,7 +93,7 @@ Filter filter_edge_h_5x5(void) {
   return f;
 }
 
-Filter filter_sharpen_5x5(void) {
+static inline Filter filter_sharpen_5x5(void) {
   Filter f = {5,
               {{-1, -1, -1, -1, -1},
                {-1, 2, 2, 2, -1},
@@ -106,7 +106,7 @@ Filter filter_sharpen_5x5(void) {
   return f;
 }
 
-Filter filter_motion_9x9(void) {
+static inline Filter filter_motion_9x9(void) {
   Filter f = {9,
               {{1, 0, 0, 0, 0, 0, 0, 0, 0},
                {0, 1, 0, 0, 0, 0, 0, 0, 0},
@@ -123,7 +123,7 @@ Filter filter_motion_9x9(void) {
   return f;
 }
 
-Filter get_filter(const char *name) {
+static inline Filter get_filter(const char *name) {
   if (!name)
     return filter_identity_3x3();
 
@@ -155,7 +155,7 @@ Filter get_filter(const char *name) {
   return filter_identity_3x3();
 }
 
-void print_filters(void) {
+static inline void print_filters(void) {
   printf("Доступные фильтры:\n");
   printf("  3×3: identity, blur3, gaussian3, edge, sharpen3, emboss, mean\n");
   printf("  5×5: blur5, gaussian5, edge_h5, sharpen5\n");

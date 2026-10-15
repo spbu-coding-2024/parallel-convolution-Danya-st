@@ -86,8 +86,6 @@ int main(int argc, char *argv[]) {
   double elapsed = (double)(end_time - start_time) / CLOCKS_PER_SEC;
   printf("время выполнения: %4f sec\n", elapsed);
 
-  // здесь делаем статистики
-
   stbi_write_png(argv[2], w, h, 1, result, w);
 
   free(result);
