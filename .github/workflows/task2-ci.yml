@@ -1,10 +1,10 @@
-name: Task2 CI
+name: Task3 CI
 
 on:
   push:
-    branches: [ "task2" ]
+    branches: [ "task3" ]
   pull_request:
-    branches: [ "task2" ]
+    branches: [ "task3" ]
 
 jobs:
   build-and-test:
