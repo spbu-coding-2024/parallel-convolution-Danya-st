@@ -15,24 +15,24 @@
 
 
 double bench_once(unsigned char *s, unsigned char *r, int w, int h,
-                  double k[3][3], double f, double b, ParallelMode mode, int tile_w,
+                  Filter *f, ParallelMode mode, int tile_w,
                   int tile_h) {
   double t0 = omp_get_wtime();
   switch (mode) {
   case MODE_SEQ:
-    seq_convolution(s, r, w, h, k, f, b);
+    seq_convolution(s, r, w, h,f);
     break;
   case MODE_PIXEL:
-    par_pixel(s, r, w, h, k, f, b);
+    pixel_convolution(s, r, w, h,f);
     break;
   case MODE_ROW:
-    par_row(s, r, w, h, k, f, b);
+    row_convolution(s, r, w, h, f);
     break;
   case MODE_COL:
-    par_col(s, r, w, h, k, f, b);
+    column_convolution(s, r, w, h, f);
     break;
   case MODE_TILE:
-    par_tile(s, r, w, h, tile_w, tile_h, k, f, b);
+    tile_convolution(s, r, w, h, tile_w, tile_h, f);
     break;
   }
   double t1 = omp_get_wtime();
@@ -40,14 +40,14 @@ double bench_once(unsigned char *s, unsigned char *r, int w, int h,
 }
 
 double bench_avg(unsigned char *s, unsigned char *r, int w, int h,
-                 double k[3][3], double f, double b, ParallelMode mode, int tw,
+                 Filter *f, ParallelMode mode, int tw,
                  int th) {
   for (int i = 0; i < WARMUP_RUNS; ++i)
-    bench_once(s, r, w, h, k, f, b, mode, tw, th);
+    bench_once(s, r, w, h, f, mode, tw, th);
 
   double total = 0;
   for (int i = 0; i < BENCH_RUNS; ++i)
-    total += bench_once(s, r, w, h, k, f, b, mode, tw, th);
+    total += bench_once(s, r, w, h, f, mode, tw, th);
   return total / BENCH_RUNS;
 }
 
@@ -81,8 +81,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  double kernel[3][3] = {{1, 2, 1}, {2, 4, 2}, {1, 2, 1}};
-  double factor = 1.0 / 16.0, bias = 0.0;
+  Filter filter = get_filter(gaussian3);
 
   int sizes[][2] = {{128, 128}, {512, 512}, {1024, 1024}, {2048, 2048}};
   ParallelMode modes[] = {MODE_SEQ, MODE_PIXEL, MODE_ROW, MODE_COL, MODE_TILE};
@@ -113,7 +112,7 @@ int main(int argc, char **argv) {
     for (int m = 0; m < 5; ++m) {
       for (int t = 1; t <= max_threads; t *= 2) {
         omp_set_num_threads(t);
-        double avg = bench_avg(test_src, test_res, sw, sh, kernel, factor, bias,
+        double avg = bench_avg(test_src, test_res, sw, sh, filter,
                                modes[m], 32, 32);
         long pixels = (long)sw * sh;
         double mpix = pixels / avg / 1e6;
