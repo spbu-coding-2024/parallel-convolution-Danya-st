@@ -1,132 +1,38 @@
-#define STB_IMAGE_IMPLEMENTATION
-#include "../lib/stb_image.h"
-#include "../lib/stb_image_write.h"
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <time.h>
 #include <omp.h>
-#include "filters.h"
 
-#define FILTER_WIDTH 3
-#define FILTER_HEIGHT 3
+#include "stb_image.h"
+#include "stb_image_write.h"
+#include "filters.h"
+#include "conv.h"
+
 #define WARMUP_RUNS 3
 #define BENCH_RUNS 10
 
-typedef enum { MODE_SEQ, MODE_PIXEL, MODE_ROW, MODE_COL, MODE_TILE } ParMode;
-
-static inline unsigned char clamp(double v, double f, double b) {
-  int val = (int)(f * v + b);
-  return (val < 0) ? 0 : (val > 255) ? 255 : (unsigned char)val;
-}
-
-void seq_conv(unsigned char *s, unsigned char *r, int w, int h, double k[3][3],
-              double f, double b) {
-  for (int y = 0; y < h; ++y)
-    for (int x = 0; x < w; ++x) {
-      double sum = 0;
-      for (int fy = 0; fy < 3; ++fy)
-        for (int fx = 0; fx < 3; ++fx) {
-          int ix = (x - 1 + fx + w) % w;
-          int iy = (y - 1 + fy + h) % h;
-          sum += s[iy * w + ix] * k[fy][fx];
-        }
-      r[y * w + x] = clamp(sum, f, b);
-    }
-}
-
-void par_pixel(unsigned char *s, unsigned char *r, int w, int h, double k[3][3],
-               double f, double b) {
-#pragma omp parallel for
-  for (long idx = 0; idx < (long)w * h; ++idx) {
-    int x = idx % w, y = idx / w;
-    double sum = 0;
-    for (int fy = 0; fy < 3; ++fy)
-      for (int fx = 0; fx < 3; ++fx) {
-        int ix = (x - 1 + fx + w) % w;
-        int iy = (y - 1 + fy + h) % h;
-        sum += s[iy * w + ix] * k[fy][fx];
-      }
-    r[y * w + x] = clamp(sum, f, b);
-  }
-}
-
-void par_row(unsigned char *s, unsigned char *r, int w, int h, double k[3][3],
-             double f, double b) {
-#pragma omp parallel for
-  for (int y = 0; y < h; ++y)
-    for (int x = 0; x < w; ++x) {
-      double sum = 0;
-      for (int fy = 0; fy < 3; ++fy)
-        for (int fx = 0; fx < 3; ++fx) {
-          int ix = (x - 1 + fx + w) % w;
-          int iy = (y - 1 + fy + h) % h;
-          sum += s[iy * w + ix] * k[fy][fx];
-        }
-      r[y * w + x] = clamp(sum, f, b);
-    }
-}
-
-void par_col(unsigned char *s, unsigned char *r, int w, int h, double k[3][3],
-             double f, double b) {
-#pragma omp parallel for
-  for (int x = 0; x < w; ++x)
-    for (int y = 0; y < h; ++y) {
-      double sum = 0;
-      for (int fy = 0; fy < 3; ++fy)
-        for (int fx = 0; fx < 3; ++fx) {
-          int ix = (x - 1 + fx + w) % w;
-          int iy = (y - 1 + fy + h) % h;
-          sum += s[iy * w + ix] * k[fy][fx];
-        }
-      r[y * w + x] = clamp(sum, f, b);
-    }
-}
-
-void par_tile(unsigned char *s, unsigned char *r, int w, int h, int tw, int th,
-              double k[3][3], double f, double b) {
-  int tx = (w + tw - 1) / tw, ty = (h + th - 1) / th;
-#pragma omp parallel for
-  for (int t = 0; t < tx * ty; ++t) {
-    int cx = t % tx, cy = t / tx;
-    int x0 = cx * tw, y0 = cy * th;
-    int x1 = (x0 + tw < w) ? x0 + tw : w;
-    int y1 = (y0 + th < h) ? y0 + th : h;
-    for (int y = y0; y < y1; ++y)
-      for (int x = x0; x < x1; ++x) {
-        double sum = 0;
-        for (int fy = 0; fy < 3; ++fy)
-          for (int fx = 0; fx < 3; ++fx) {
-            int ix = (x - 1 + fx + w) % w;
-            int iy = (y - 1 + fy + h) % h;
-            sum += s[iy * w + ix] * k[fy][fx];
-          }
-        r[y * w + x] = clamp(sum, f, b);
-      }
-  }
-}
 
 double bench_once(unsigned char *s, unsigned char *r, int w, int h,
-                  double k[3][3], double f, double b, ParMode mode, int tile_w,
+                  Filter *f, ParallelMode mode, int tile_w,
                   int tile_h) {
   double t0 = omp_get_wtime();
   switch (mode) {
   case MODE_SEQ:
-    seq_conv(s, r, w, h, k, f, b);
+    seq_convolution(s, r, w, h,f);
     break;
   case MODE_PIXEL:
-    par_pixel(s, r, w, h, k, f, b);
+    pixel_convolution(s, r, w, h,f);
     break;
   case MODE_ROW:
-    par_row(s, r, w, h, k, f, b);
+    row_convolution(s, r, w, h, f);
     break;
   case MODE_COL:
-    par_col(s, r, w, h, k, f, b);
+    column_convolution(s, r, w, h, f);
     break;
   case MODE_TILE:
-    par_tile(s, r, w, h, tile_w, tile_h, k, f, b);
+    tile_convolution(s, r, w, h, tile_w, tile_h, f);
     break;
   }
   double t1 = omp_get_wtime();
@@ -134,18 +40,18 @@ double bench_once(unsigned char *s, unsigned char *r, int w, int h,
 }
 
 double bench_avg(unsigned char *s, unsigned char *r, int w, int h,
-                 double k[3][3], double f, double b, ParMode mode, int tw,
+                 Filter *f, ParallelMode mode, int tw,
                  int th) {
   for (int i = 0; i < WARMUP_RUNS; ++i)
-    bench_once(s, r, w, h, k, f, b, mode, tw, th);
+    bench_once(s, r, w, h, f, mode, tw, th);
 
   double total = 0;
   for (int i = 0; i < BENCH_RUNS; ++i)
-    total += bench_once(s, r, w, h, k, f, b, mode, tw, th);
+    total += bench_once(s, r, w, h, f, mode, tw, th);
   return total / BENCH_RUNS;
 }
 
-const char *mode_name(ParMode m) {
+const char *mode_name(ParallelMode m) {
   static const char *names[] = {"seq", "pixel", "row", "col", "tile"};
   return names[m];
 }
@@ -175,11 +81,10 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  double kernel[3][3] = {{1, 2, 1}, {2, 4, 2}, {1, 2, 1}};
-  double factor = 1.0 / 16.0, bias = 0.0;
+  Filter filter = get_filter(gaussian3);
 
   int sizes[][2] = {{128, 128}, {512, 512}, {1024, 1024}, {2048, 2048}};
-  ParMode modes[] = {MODE_SEQ, MODE_PIXEL, MODE_ROW, MODE_COL, MODE_TILE};
+  ParallelMode modes[] = {MODE_SEQ, MODE_PIXEL, MODE_ROW, MODE_COL, MODE_TILE};
 
   if (csv_out) {
     FILE *f = fopen(csv_out, "w");
@@ -207,7 +112,7 @@ int main(int argc, char **argv) {
     for (int m = 0; m < 5; ++m) {
       for (int t = 1; t <= max_threads; t *= 2) {
         omp_set_num_threads(t);
-        double avg = bench_avg(test_src, test_res, sw, sh, kernel, factor, bias,
+        double avg = bench_avg(test_src, test_res, sw, sh, filter,
                                modes[m], 32, 32);
         long pixels = (long)sw * sh;
         double mpix = pixels / avg / 1e6;
