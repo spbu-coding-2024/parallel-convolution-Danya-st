@@ -37,7 +37,7 @@ void pixel_convolution(unsigned char *src, unsigned char *result, int w, int h,
     int oy = (int)(idx / w);
     double sum = 0.0;
     for (int filterX = 0; filterX < f->size; ++filterX)
-      for (int filterY = 0; filterY < f-size; ++filterY) {
+      for (int filterY = 0; filterY < f->size; ++filterY) {
         int imageX = (ox - r + filterX + w) % w;
         int imageY = (oy - r + filterY + h) % h;
         sum += src[imageY * w + imageX] * f->kernel[filterY][filterX];

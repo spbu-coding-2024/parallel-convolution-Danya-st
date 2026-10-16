@@ -19,13 +19,13 @@ void seq_convolution(unsigned char *src, unsigned char *result, int w, int h,
                      Filter *f);
 
 void pixel_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                       Filter *f)
+                       Filter *f);
             
 void column_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                        Filter *f) 
+                        Filter *f);
 
 void row_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                     Filter *f)
+                     Filter *f);
 
 void tile_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                      int TILE_W, int TILE_H, Filter *f)
+                      int TILE_W, int TILE_H, Filter *f);
