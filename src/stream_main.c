@@ -1,416 +1,123 @@
-#define STB_IMAGE_IMPLEMENTATION
-#include "../lib/stb_image.h"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "../lib/stb_image_write.h"
-
-#include "../lib/filters.h"
-#include <omp.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
-#include <time.h>
-#include <dirent.h>
-#include <sys/stat.h>
 
-#define MAX_FILTER_SIZE 9
-#define FILTER_WIDTH 3
-#define FILTER_HEIGHT 3
-#define QUEUE_CAPACITY 8
-#define MAX_PATH 1024
+#include "conv.h"
+#include "filters.h"
+#include "pipeline.h"
 
-double factor = 1.0;
-double bias = 0.0;
+// Что изменено по сравнению со старым stream_main.c:
+//  - ИСПРАВЛЕНО (дубликаты кода): очередь, потоки читателя/воркеров/писателя
+//    и копии свёртки (seq/pixel/row/col/tile, глобальные factor/bias,
+//    FILTER_WIDTH = 3) удалены - всё в lib/pipeline.c и lib/conv.c, общих с
+//    bench_stream.c. Это же исправляет фильтры 5x5/9x9, factor/bias и
+//    переполнение w * h;
+//  - ИСПРАВЛЕНО (лимит 16 воркеров): раньше pthread_t workers[16] без проверки
+//    num_workers, 17+ воркеров портили стек;
+//  - ИСПРАВЛЕНО (зависание): отсутствующая входная папка давала вечное
+//    ожидание; теперь ошибка и код возврата 1;
+//  - ИСПРАВЛЕНО (утечка): "таблетка" завершения больше не теряется - очереди
+//    закрываются явно;
+//  - ИСПРАВЛЕНО (jpg): обрабатываются .png/.jpg/.jpeg/.bmp в любом регистре;
+//    результат всегда PNG, поэтому photo.jpg сохраняется как photo.jpg.png;
+//  - ИСПРАВЛЕНО: результат записи проверяется, ошибки чтения/записи
+//    считаются, неверные --parallel/--tile/число воркеров дают ошибку (раньше
+//    молча превращались в seq/мусор/1 воркер);
+//  - новые параметры --omp-threads и --queue; в конце печатается время по
+//    стадиям (чтение / свёртка / запись) и простои на очередях.
 
-typedef enum {
-  MODE_SEQ,
-  MODE_PIXEL,
-  MODE_ROW,
-  MODE_COL,
-  MODE_TILE
-} ParallelMode;
-
-typedef struct {
-  unsigned char *data;
-  int w, h;
-  char filename[MAX_PATH];
-  int done;
-} ImageTask;
-
-typedef struct {
-  ImageTask *items[QUEUE_CAPACITY];
-  int head, tail, count;
-  pthread_mutex_t mutex;
-  pthread_cond_t not_empty, not_full;
-  int shutdown;
-} TaskQueue;
-
-void queue_init(TaskQueue *q) {
-  q->head = q->tail = q->count = 0;
-  q->shutdown = 0;
-  pthread_mutex_init(&q->mutex, NULL);
-  pthread_cond_init(&q->not_empty, NULL);
-  pthread_cond_init(&q->not_full, NULL);
-}
-
-void queue_destroy(TaskQueue *q) {
-  pthread_mutex_destroy(&q->mutex);
-  pthread_cond_destroy(&q->not_empty);
-  pthread_cond_destroy(&q->not_full);
-}
-
-int queue_push(TaskQueue *q, ImageTask *task) {
-  pthread_mutex_lock(&q->mutex);
-  while (q->count == QUEUE_CAPACITY && !q->shutdown)
-    pthread_cond_wait(&q->not_full, &q->mutex);
-  if (q->shutdown) {
-    pthread_mutex_unlock(&q->mutex);
+static int parse_positive(const char *s, int *out) {
+  char *end = NULL;
+  long v = strtol(s, &end, 10);
+  if (end == s || *end != '\0' || v < 1 || v > 100000)
     return -1;
-  }
-  q->items[q->tail] = task;
-  q->tail = (q->tail + 1) % QUEUE_CAPACITY;
-  q->count++;
-  pthread_cond_signal(&q->not_empty);
-  pthread_mutex_unlock(&q->mutex);
+  *out = (int)v;
   return 0;
-}
-
-ImageTask *queue_pop(TaskQueue *q) {
-  pthread_mutex_lock(&q->mutex);
-  while (q->count == 0 && !q->shutdown)
-    pthread_cond_wait(&q->not_empty, &q->mutex);
-  if (q->count == 0) {
-    pthread_mutex_unlock(&q->mutex);
-    return NULL;
-  }
-  ImageTask *task = q->items[q->head];
-  q->head = (q->head + 1) % QUEUE_CAPACITY;
-  q->count--;
-  pthread_cond_signal(&q->not_full);
-  pthread_mutex_unlock(&q->mutex);
-  return task;
-}
-
-void queue_shutdown(TaskQueue *q) {
-  pthread_mutex_lock(&q->mutex);
-  q->shutdown = 1;
-  pthread_cond_broadcast(&q->not_empty);
-  pthread_cond_broadcast(&q->not_full);
-  pthread_mutex_unlock(&q->mutex);
-}
-
-static inline unsigned char clamp(double value) {
-  int v = (int)(factor * value + bias);
-  if (v < 0)
-    return 0;
-  if (v > 255)
-    return 255;
-  return (unsigned char)v;
-}
-
-void seq_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                     Filter *f) {
-  for (int y = 0; y < h; ++y)
-    for (int x = 0; x < w; ++x) {
-      double sum = 0.0;
-      for (int fy = 0; fy < FILTER_HEIGHT; ++fy)
-        for (int fx = 0; fx < FILTER_WIDTH; ++fx) {
-          int ix = (x - FILTER_WIDTH / 2 + fx + w) % w;
-          int iy = (y - FILTER_HEIGHT / 2 + fy + h) % h;
-          sum += src[iy * w + ix] * f->kernel[fy][fx];
-        }
-      result[y * w + x] = clamp(sum);
-    }
-}
-
-void pixel_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                       Filter *f) {
-  const long total = (long)w * h;
-#pragma omp parallel for
-  for (long idx = 0; idx < total; ++idx) {
-    int x = idx % w, y = idx / w;
-    double sum = 0.0;
-    for (int fy = 0; fy < FILTER_HEIGHT; ++fy)
-      for (int fx = 0; fx < FILTER_WIDTH; ++fx) {
-        int ix = (x - FILTER_WIDTH / 2 + fx + w) % w;
-        int iy = (y - FILTER_HEIGHT / 2 + fy + h) % h;
-        sum += src[iy * w + ix] * f->kernel[fy][fx];
-      }
-    result[idx] = clamp(sum);
-  }
-}
-
-void row_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                     Filter *f) {
-#pragma omp parallel for
-  for (int y = 0; y < h; ++y)
-    for (int x = 0; x < w; ++x) {
-      double sum = 0.0;
-      for (int fy = 0; fy < FILTER_HEIGHT; ++fy)
-        for (int fx = 0; fx < FILTER_WIDTH; ++fx) {
-          int ix = (x - FILTER_WIDTH / 2 + fx + w) % w;
-          int iy = (y - FILTER_HEIGHT / 2 + fy + h) % h;
-          sum += src[iy * w + ix] * f->kernel[fy][fx];
-        }
-      result[y * w + x] = clamp(sum);
-    }
-}
-
-void column_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                        Filter *f) {
-#pragma omp parallel for
-  for (int x = 0; x < w; ++x)
-    for (int y = 0; y < h; ++y) {
-      double sum = 0.0;
-      for (int fy = 0; fy < FILTER_HEIGHT; ++fy)
-        for (int fx = 0; fx < FILTER_WIDTH; ++fx) {
-          int ix = (x - FILTER_WIDTH / 2 + fx + w) % w;
-          int iy = (y - FILTER_HEIGHT / 2 + fy + h) % h;
-          sum += src[iy * w + ix] * f->kernel[fy][fx];
-        }
-      result[y * w + x] = clamp(sum);
-    }
-}
-
-void tile_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                      int tw, int th, Filter *f) {
-  int tx = (w + tw - 1) / tw, ty = (h + th - 1) / th;
-#pragma omp parallel for
-  for (int t = 0; t < tx * ty; ++t) {
-    int cx = t % tx, cy = t / tx;
-    int x0 = cx * tw, y0 = cy * th;
-    int x1 = (x0 + tw < w) ? x0 + tw : w;
-    int y1 = (y0 + th < h) ? y0 + th : h;
-    for (int y = y0; y < y1; ++y)
-      for (int x = x0; x < x1; ++x) {
-        double sum = 0.0;
-        for (int fy = 0; fy < FILTER_HEIGHT; ++fy)
-          for (int fx = 0; fx < FILTER_WIDTH; ++fx) {
-            int ix = (x - FILTER_WIDTH / 2 + fx + w) % w;
-            int iy = (y - FILTER_HEIGHT / 2 + fy + h) % h;
-            sum += src[iy * w + ix] * f->kernel[fy][fx];
-          }
-        result[y * w + x] = clamp(sum);
-      }
-  }
-}
-
-typedef struct {
-  TaskQueue *read_q, *proc_q;
-  const char *input_dir, *output_dir;
-  Filter *filter;
-  ParallelMode mode;
-  int tile_w, tile_h;
-  int processed_count;
-  pthread_mutex_t count_mutex;
-} WorkerArgs;
-
-void *reader_thread(void *arg) {
-  WorkerArgs *args = (WorkerArgs *)arg;
-  DIR *dir = opendir(args->input_dir);
-  if (!dir) {
-    fprintf(stderr, "Cannot open %s\n", args->input_dir);
-    return NULL;
-  }
-
-  struct dirent *entry;
-  while ((entry = readdir(dir)) != NULL) {
-    const char *name = entry->d_name;
-    int len = strlen(name);
-    if (len < 4 || strcmp(name + len - 4, ".png") != 0)
-      continue;
-
-    char path[MAX_PATH];
-    snprintf(path, sizeof(path), "%s/%s", args->input_dir, name);
-
-    struct stat st;
-    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode))
-      continue;
-    int w, h, ch;
-    unsigned char *src = stbi_load(path, &w, &h, &ch, 1);
-    if (!src) {
-      fprintf(stderr, "Load error: %s\n", name);
-      continue;
-    }
-
-    ImageTask *task = malloc(sizeof(ImageTask));
-    task->data = src;
-    task->w = w;
-    task->h = h;
-    strncpy(task->filename, name, MAX_PATH - 1);
-    task->done = 0;
-
-    if (queue_push(args->read_q, task) < 0) {
-      free(task->data);
-      free(task);
-      break;
-    }
-  }
-  closedir(dir);
-
-  ImageTask *done = malloc(sizeof(ImageTask));
-  done->done = 1;
-  queue_push(args->read_q, done);
-  return NULL;
-}
-
-void *worker_thread(void *arg) {
-  WorkerArgs *args = (WorkerArgs *)arg;
-
-  while (1) {
-    ImageTask *task = queue_pop(args->read_q);
-    if (!task)
-      break;
-    if (task->done) {
-
-      queue_push(args->read_q, task);
-      break;
-    }
-
-    unsigned char *result = malloc(task->w * task->h);
-    if (!result) {
-      free(task->data);
-      free(task);
-      continue;
-    }
-
-    switch (args->mode) {
-    case MODE_PIXEL:
-      pixel_convolution(task->data, result, task->w, task->h, args->filter);
-      break;
-    case MODE_ROW:
-      row_convolution(task->data, result, task->w, task->h, args->filter);
-      break;
-    case MODE_COL:
-      column_convolution(task->data, result, task->w, task->h, args->filter);
-      break;
-    case MODE_TILE:
-      tile_convolution(task->data, result, task->w, task->h, args->tile_w,
-                       args->tile_h, args->filter);
-      break;
-    default:
-      seq_convolution(task->data, result, task->w, task->h, args->filter);
-    }
-
-    free(task->data);
-    task->data = result;
-
-    if (queue_push(args->proc_q, task) < 0) {
-      free(task->data);
-      free(task);
-      break;
-    }
-
-    pthread_mutex_lock(&args->count_mutex);
-    args->processed_count++;
-    pthread_mutex_unlock(&args->count_mutex);
-  }
-  return NULL;
-}
-
-void *writer_thread(void *arg) {
-  WorkerArgs *args = (WorkerArgs *)arg;
-
-  while (1) {
-    ImageTask *task = queue_pop(args->proc_q);
-    if (!task)
-      break;
-    if (task->done) {
-      free(task);
-      break;
-    }
-
-    char out_path[MAX_PATH];
-    snprintf(out_path, sizeof(out_path), "%s/%s", args->output_dir,
-             task->filename);
-
-    stbi_write_png(out_path, task->w, task->h, 1, task->data, task->w);
-
-    free(task->data);
-    free(task);
-  }
-  return NULL;
 }
 
 int main(int argc, char *argv[]) {
   if (argc < 4) {
     fprintf(stderr,
             "usage: %s <input_dir> <output_dir> <num_workers> [--filter=name] "
-            "[--parallel=mode] [--tile=WxH]\n",
+            "[--parallel=mode] [--tile=WxH] [--omp-threads=N] [--queue=N]\n",
             argv[0]);
-    printf("Filters: identity, blur3, gaussian3, edge, sharpen3, emboss, mean, "
-           "motion9\n");
+    printf("Filters: identity, blur3, blur5, gaussian3, gaussian5, edge, "
+           "edge_h5, sharpen3, sharpen5, emboss, mean, motion9\n");
     printf("Modes: seq, pixel, row, col, tile (default: seq)\n");
     return EXIT_FAILURE;
   }
 
   const char *input_dir = argv[1], *output_dir = argv[2];
-  int num_workers = atoi(argv[3]);
-  if (num_workers < 1)
-    num_workers = 1;
+  PipelineConfig cfg;
+  memset(&cfg, 0, sizeof cfg);
+  cfg.queue_capacity = 8;
+  cfg.mode = MODE_SEQ;
+  cfg.tile_w = 32;
+  cfg.tile_h = 32;
+  cfg.omp_threads = 0;
+  if (parse_positive(argv[3], &cfg.num_workers) != 0) {
+    fprintf(stderr, "Некорректное число воркеров: %s\n", argv[3]);
+    return EXIT_FAILURE;
+  }
 
   // Парсинг аргументов
   char *filter_name = "identity";
-  ParallelMode mode = MODE_SEQ;
-  int tile_w = 32, tile_h = 32;
 
   for (int i = 4; i < argc; ++i) {
-    if (strncmp(argv[i], "--filter=", 9) == 0)
+    if (strncmp(argv[i], "--filter=", 9) == 0) {
       filter_name = argv[i] + 9;
-    else if (strncmp(argv[i], "--parallel=", 11) == 0) {
+    } else if (strncmp(argv[i], "--parallel=", 11) == 0) {
       const char *m = argv[i] + 11;
       if (strcmp(m, "pixel") == 0)
-        mode = MODE_PIXEL;
+        cfg.mode = MODE_PIXEL;
       else if (strcmp(m, "row") == 0)
-        mode = MODE_ROW;
+        cfg.mode = MODE_ROW;
       else if (strcmp(m, "col") == 0)
-        mode = MODE_COL;
+        cfg.mode = MODE_COL;
       else if (strcmp(m, "tile") == 0)
-        mode = MODE_TILE;
+        cfg.mode = MODE_TILE;
+      else if (strcmp(m, "seq") == 0)
+        cfg.mode = MODE_SEQ;
+      else {
+        fprintf(stderr, "Неизвестный режим: %s\n", m);
+        return EXIT_FAILURE;
+      }
     } else if (strncmp(argv[i], "--tile=", 7) == 0) {
-      sscanf(argv[i] + 7, "%dx%d", &tile_w, &tile_h);
+      int n = 0;
+      if (sscanf(argv[i] + 7, "%dx%d%n", &cfg.tile_w, &cfg.tile_h, &n) != 2 ||
+          argv[i][7 + n] != '\0' || cfg.tile_w < 1 || cfg.tile_h < 1) {
+        fprintf(stderr, "Некорректный --tile (нужно WxH, W,H >= 1)\n");
+        return EXIT_FAILURE;
+      }
+    } else if (strncmp(argv[i], "--omp-threads=", 14) == 0) {
+      if (parse_positive(argv[i] + 14, &cfg.omp_threads) != 0) {
+        fprintf(stderr, "Некорректный --omp-threads: %s\n", argv[i] + 14);
+        return EXIT_FAILURE;
+      }
+    } else if (strncmp(argv[i], "--queue=", 8) == 0) {
+      if (parse_positive(argv[i] + 8, &cfg.queue_capacity) != 0) {
+        fprintf(stderr, "Некорректный --queue: %s\n", argv[i] + 8);
+        return EXIT_FAILURE;
+      }
+    } else {
+      fprintf(stderr, "Неизвестный параметр: %s\n", argv[i]);
+      return EXIT_FAILURE;
     }
   }
 
   Filter filter = get_filter(filter_name);
 
-  TaskQueue read_q, proc_q;
-  queue_init(&read_q);
-  queue_init(&proc_q);
+  PipelineStats st;
+  if (pipeline_run(input_dir, output_dir, &filter, &cfg, &st) != 0)
+    return EXIT_FAILURE;
 
-  WorkerArgs args = {.read_q = &read_q,
-                     .proc_q = &proc_q,
-                     .input_dir = input_dir,
-                     .output_dir = output_dir,
-                     .filter = &filter,
-                     .mode = mode,
-                     .tile_w = tile_w,
-                     .tile_h = tile_h,
-                     .processed_count = 0};
-  pthread_mutex_init(&args.count_mutex, NULL);
-
-  pthread_t reader, writer, workers[16];
-  pthread_create(&reader, NULL, reader_thread, &args);
-  pthread_create(&writer, NULL, writer_thread, &args);
-  for (int i = 0; i < num_workers; ++i)
-    pthread_create(&workers[i], NULL, worker_thread, &args);
-
-  pthread_join(reader, NULL);
-  for (int i = 0; i < num_workers; ++i)
-    pthread_join(workers[i], NULL);
-
-  ImageTask *done = malloc(sizeof(ImageTask));
-  done->done = 1;
-  queue_push(&proc_q, done);
-  pthread_join(writer, NULL);
-
-  queue_shutdown(&read_q);
-  queue_shutdown(&proc_q);
-  queue_destroy(&read_q);
-  queue_destroy(&proc_q);
-  pthread_mutex_destroy(&args.count_mutex);
-
-  printf("Processed %d images\n", args.processed_count);
-  return 0;
+  printf("Processed %d images in %.3f s (read failed: %d, write failed: %d)\n",
+         st.written, st.wall_sec, st.read_failed, st.write_failed);
+  printf("Время стадий (CPU, сумма по потокам): чтение %.3f s, свёртка %.3f s, "
+         "запись %.3f s\n",
+         st.read_busy_sec, st.conv_busy_sec, st.write_busy_sec);
+  printf("Простои: читатель ждёт место %.3f s, воркеры ждут данные %.3f s, "
+         "писатель ждёт данные %.3f s\n",
+         st.reader_blocked_sec, st.workers_starved_sec, st.writer_starved_sec);
+  return (st.read_failed || st.write_failed) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
