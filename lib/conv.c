@@ -10,7 +10,6 @@ unsigned char clamp(double value, const Filter *f) {
     return 255;
   return (unsigned char)v;
 }
-https://www.onlinegdb.com/online_c_compiler
 void seq_convolution(const unsigned char *src, unsigned char *result, int w,
                      int h, const Filter *f) {
   const int r = f->size / 2;

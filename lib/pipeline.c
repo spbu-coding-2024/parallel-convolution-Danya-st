@@ -18,14 +18,6 @@
 #define NAME_MAX_LEN 256
 #define PATH_MAX_LEN 4096
 
-/*
- * Время стадий меряется процессорным временем ПОТОКА (CLOCK_THREAD_CPUTIME_ID),
- * а не настенным: на машине, где потоков больше, чем ядер, настенное время
- * стадии включает ожидание процессора и раздувает суммы (сумма "занятого"
- * времени получалась больше времени всего прогона). Для свёртки в режиме с
- * OpenMP считается настенное время, т.к. работу делает команда потоков, а не
- * только вызывающий поток.
- */
 static double cpu_now(void) {
   struct timespec ts;
   if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0)
@@ -39,20 +31,7 @@ typedef struct {
   char name[NAME_MAX_LEN];
 } ImageTask;
 
-/*
- * Ограниченная блокирующая очередь с ЯВНЫМ закрытием.
- *
- * ИСПРАВЛЕНО (задача 3, "Утечка" и "зависание при отсутствии папки"):
- * раньше завершение передавалось "таблетками" (ImageTask с done = 1).
- *  - Последний воркер возвращал таблетку обратно в read_q и выходил, и её
- *    никто не освобождал - утечка памяти на каждый запуск.
- *  - Если читатель не мог открыть директорию, он выходил, НЕ положив
- *    таблетку, и воркеры навсегда оставались ждать на queue_pop (зависание).
- * Теперь вместо таблеток - queue_close(): после закрытия pop отдаёт
- * оставшиеся элементы, а затем NULL. Закрывает очередь тот, кто в неё
- * пишет, на ЕДИНСТВЕННОМ пути выхода (читатель - всегда перед return, воркеры
- * - главный поток после join всех воркеров), поэтому зависнуть нечему.
- */
+
 typedef struct {
   ImageTask **items;
   int capacity, head, tail, count, closed, peak;
@@ -141,13 +120,6 @@ typedef struct {
   pthread_mutex_t stats_mutex;
 } Pipeline;
 
-/*
- * Расширения без учёта регистра. ИСПРАВЛЕНО (задача 3, "поддержку jpg"):
- * раньше принимался только ровно ".png" в нижнем регистре, поэтому
- * photo.jpg / photo.JPEG / PHOTO.PNG молча пропускались (в input/ лежало два
- * .jpg, которые никогда не обрабатывались). Содержимое определяет сам stb
- * (поэтому файлы вида tiger.png, внутри являющиеся JPEG, тоже читаются).
- */
 static int has_ext(const char *name, const char *ext) {
   const size_t n = strlen(name), e = strlen(ext);
   if (n <= e)
@@ -163,11 +135,6 @@ static int is_image_name(const char *name) {
          has_ext(name, ".jpeg") || has_ext(name, ".bmp");
 }
 
-/*
- * ИСПРАВЛЕНО: раньше результат всегда кодировался в PNG, но записывался под
- * исходным именем, т.е. из photo.jpg получался файл photo.jpg с PNG внутри.
- * Теперь расширение соответствует формату: для не-PNG добавляется ".png".
- */
 static void output_name(const char *in_name, char *out, size_t cap) {
   if (has_ext(in_name, ".png"))
     snprintf(out, cap, "%s", in_name);
@@ -256,8 +223,6 @@ static void *worker_thread(void *arg) {
   double busy = 0.0;
   int failed = 0;
 
-  /* omp_set_num_threads действует на вызывающий поток, поэтому вызывается в
-   * каждом воркере (как и раньше в bench_stream). */
   if (p->cfg.omp_threads > 0)
     omp_set_num_threads(p->cfg.omp_threads);
 
@@ -299,11 +264,6 @@ static void *writer_thread(void *arg) {
     char name[NAME_MAX_LEN + 8], path[PATH_MAX_LEN];
     output_name(task->name, name, sizeof name);
 
-    /*
-     * ИСПРАВЛЕНО (задача 3, "проверку записи"): результат stbi_write_png
-     * раньше игнорировался, и при ошибке записи (нет места, нет прав,
-     * несуществующая папка) программа молча считала файл сохранённым.
-     */
     const double t0 = cpu_now();
     const int ok = snprintf(path, sizeof path, "%s/%s", p->out_dir, name) <
                        (int)sizeof path &&
@@ -343,12 +303,6 @@ int pipeline_run(const char *in_dir, const char *out_dir, const Filter *filter,
       cfg->num_workers < 1 || cfg->queue_capacity < 1)
     return -1;
 
-  /*
-   * ИСПРАВЛЕНО (задача 3, "зависание при отсутствии папки"): директория
-   * открывается ДО запуска потоков, и при ошибке мы сразу возвращаем -1.
-   * Раньше открытие делал читатель, и при ошибке он выходил без таблетки,
-   * из-за чего воркеры и писатель ждали вечно.
-   */
   DIR *dir = opendir(in_dir);
   if (!dir) {
     fprintf(stderr, "Cannot open %s\n", in_dir);
@@ -369,12 +323,6 @@ int pipeline_run(const char *in_dir, const char *out_dir, const Filter *filter,
   p.cfg = *cfg;
   pthread_mutex_init(&p.stats_mutex, NULL);
 
-  /*
-   * ИСПРАВЛЕНО (задача 3, "лимит 16 воркеров"): массив pthread_t был
-   * фиксированным workers[16] без проверки num_workers, т.е. запуск с
-   * 17 и более воркерами портил стек. Теперь массив выделяется под
-   * запрошенное число потоков.
-   */
   pthread_t *workers = calloc((size_t)cfg->num_workers, sizeof *workers);
   if (!workers || queue_init(&p.read_q, cfg->queue_capacity) != 0) {
     free(workers);
@@ -391,8 +339,6 @@ int pipeline_run(const char *in_dir, const char *out_dir, const Filter *filter,
   int status = 0;
   const double start = omp_get_wtime();
 
-  /* Порядок запуска: писатель, воркеры, читатель - так, что если не удалось
-   * создать потоки, читатель ещё не стартовал и зависнуть некому. */
   pthread_t writer, reader;
   int writer_started = 0, reader_started = 0, workers_started = 0;
   if (pthread_create(&writer, NULL, writer_thread, &p) == 0)
