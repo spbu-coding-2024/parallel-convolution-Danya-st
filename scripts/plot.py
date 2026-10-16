@@ -1,323 +1,252 @@
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
-import sys
-import os
-from matplotlib.gridspec import GridSpec
+#!/usr/bin/env python3
+"""Графики по результатам bench: plot.py <results.csv> [output_dir] [threads].
 
-plt.style.use('seaborn-v0_8-whitegrid')
-sns.set_palette("husl")
-plt.rcParams['figure.figsize'] = (12, 8)
-plt.rcParams['font.size'] = 10
+(для 20 потоков: plot.py results.csv plots 20).
+"""
+import os
+import sys
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+import pandas as pd  # noqa: E402
+
+try:
+    plt.style.use("seaborn-v0_8-whitegrid")
+except OSError:
+    pass
+plt.rcParams["font.size"] = 10
+
+STRATEGIES = ["pixel", "row", "col", "tile"]
+LABELS = {"pixel": "Pixel", "row": "Row", "col": "Col", "tile": "Tile"}
+COLORS = {"pixel": "#FF6B6B", "row": "#4ECDC4", "col": "#45B7D1",
+          "tile": "#FFA07A"}
+
 
 def load_data(csv_file):
-    """Загрузка данных из CSV"""
     df = pd.read_csv(csv_file)
-    df['width'] = df['size'].apply(lambda x: int(x.split('x')[0]))
-    df['height'] = df['size'].apply(lambda x: int(x.split('x')[1]))
-    df['total_pixels'] = df['width'] * df['height']
+    key = ["experiment", "size", "filter"]
+    seq = df[df["mode"] == "seq"][key + ["median_sec"]].rename(
+        columns={"median_sec": "seq_sec"})
+    df = df.merge(seq, on=key, how="left")
+    df["speedup"] = df["seq_sec"] / df["median_sec"]
+    df["efficiency"] = df["speedup"] / df["threads"] * 100.0
     return df
 
-def plot_strategy_comparison(df, output_dir='plots'):
-    """График 1: Сравнение стратегий для каждого размера"""
-    os.makedirs(output_dir, exist_ok=True)
-    
-    sizes = sorted(df['size'].unique())
-    
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    axes = axes.flatten()
-    
-    strategies = ['pixel', 'row', 'col', 'tile']
-    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A']
-    
-    for idx, size in enumerate(sizes):
-        if idx >= 4:
-            break
-        ax = axes[idx]
-        subset = df[df['size'] == size]
-        
-        avg_times = subset.groupby('mode')['time_sec'].mean()
-        
-        bars = ax.bar(strategies, [avg_times.get(s, 0) for s in strategies], 
-                     color=colors, alpha=0.7, edgecolor='black')
-        
-        for bar in bars:
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height,
-                   f'{height*1000:.1f}ms', ha='center', va='bottom', fontsize=9)
-        
-        ax.set_title(f'Размер: {size}', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Время (сек)')
-        ax.set_xticklabels(['Pixel', 'Row', 'Col', 'Tile'], rotation=0)
-        ax.grid(axis='y', alpha=0.3)
-    
-    plt.suptitle('Сравнение времени выполнения для разных стратегий параллелизации', 
-                fontsize=14, fontweight='bold', y=1.02)
-    plt.tight_layout()
-    plt.savefig(f'{output_dir}/01_strategy_comparison.png', dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f" Создан график: {output_dir}/01_strategy_comparison.png")
 
-def plot_speedup_vs_sequential(df, output_dir='plots'):
-    """График 2: Ускорение относительно последовательной версии"""
-    os.makedirs(output_dir, exist_ok=True)
-    
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+def size_grid(sizes):
+    rows = (len(sizes) + 1) // 2
+    fig, axes = plt.subplots(rows, 2, figsize=(14, 5 * rows), squeeze=False)
     axes = axes.flatten()
-    
-    sizes = sorted(df['size'].unique())
-    strategies = ['pixel', 'row', 'col', 'tile']
-    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A']
-    
-    for idx, size in enumerate(sizes):
-        if idx >= 4:
-            break
-        ax = axes[idx]
-        subset = df[df['size'] == size]
-        
-        seq_time = subset[(subset['mode'] == 'seq') & (subset['threads'] == 1)]['time_sec'].mean()
-        
-        if pd.isna(seq_time) or seq_time == 0:
-            continue
-            
-        speedup_data = []
-        for strategy in strategies:
-            strat_subset = subset[subset['mode'] == strategy]
-            for threads in sorted(strat_subset['threads'].unique()):
-                time_val = strat_subset[strat_subset['threads'] == threads]['time_sec'].mean()
-                if not pd.isna(time_val) and time_val > 0:
-                    speedup = seq_time / time_val
-                    speedup_data.append({
-                        'strategy': strategy,
-                        'threads': threads,
-                        'speedup': speedup
-                    })
-        
-        if speedup_data:
-            speedup_df = pd.DataFrame(speedup_data)
-            
-            for strategy in strategies:
-                strat_data = speedup_df[speedup_df['strategy'] == strategy]
-                color = colors[strategies.index(strategy)]
-                ax.plot(strat_data['threads'], strat_data['speedup'], 
-                       marker='o', label=strategy.capitalize(), linewidth=2, color=color)
-        
-        ax.axhline(y=1, color='gray', linestyle='--', alpha=0.5, label='Без ускорения')
-        ax.set_title(f'Ускорение для {size}', fontsize=12, fontweight='bold')
-        ax.set_xlabel('Количество потоков')
-        ax.set_ylabel('Ускорение (раз)')
-        ax.set_xticks([1, 2, 4, 8])
+    for ax in axes[len(sizes):]:
+        ax.axis("off")
+    return fig, axes
+
+
+def save(fig, out_dir, name, title):
+    fig.suptitle(title, fontsize=14, fontweight="bold", y=1.02)
+    fig.tight_layout()
+    path = os.path.join(out_dir, name)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print("Создан график:", path)
+
+
+def plot_strategy_comparison(df, base_fs, threads, out_dir):
+    """01: время стратегий для каждого размера (фильтр base_fs x base_fs)."""
+    sizes = sorted(df["size"].unique())
+    fig, axes = size_grid(sizes)
+    for ax, size in zip(axes, sizes):
+        sub = df[(df["size"] == size) & (df["filter_size"] == base_fs)]
+        times = [sub[(sub["mode"] == s) & (sub["threads"] == threads)]
+                 ["median_sec"].mean() for s in STRATEGIES]
+        times = [0 if pd.isna(t) else t for t in times]
+        bars = ax.bar([LABELS[s] for s in STRATEGIES], times,
+                      color=[COLORS[s] for s in STRATEGIES], alpha=0.7,
+                      edgecolor="black")
+        for bar, t in zip(bars, times):
+            ax.text(bar.get_x() + bar.get_width() / 2, t, f"{t * 1000:.2f}ms",
+                    ha="center", va="bottom", fontsize=9)
+        seq = sub[sub["mode"] == "seq"]["median_sec"].mean()
+        if not pd.isna(seq):
+            ax.axhline(seq, color="gray", ls="--", alpha=0.7,
+                       label=f"seq: {seq * 1000:.2f}ms")
+            ax.legend(fontsize=8)
+        ax.set_title(f"Размер: {size}x{size}", fontsize=12, fontweight="bold")
+        ax.set_ylabel("Время (сек)")
+        ax.grid(axis="y", alpha=0.3)
+    save(fig, out_dir, "01_strategy_comparison.png",
+         f"Время стратегий параллелизации (фильтр {base_fs}x{base_fs}, "
+         f"{threads} потоков)")
+
+
+def lines_by_size(df, base_fs, out_dir, name, title, y, ylabel, min_threads=1,
+                  ref_lines=()):
+    sizes = sorted(df["size"].unique())
+    fig, axes = size_grid(sizes)
+    for ax, size in zip(axes, sizes):
+        sub = df[(df["size"] == size) & (df["filter_size"] == base_fs) &
+                 (df["mode"] != "seq") & (df["threads"] >= min_threads)]
+        for s in STRATEGIES:
+            d = sub[sub["mode"] == s].sort_values("threads")
+            ax.plot(d["threads"], d[y], marker="o", linewidth=2,
+                    color=COLORS[s], label=LABELS[s])
+        for value, color, style, label in ref_lines:
+            ax.axhline(value, color=color, ls=style, alpha=0.5, label=label)
+        if y == "speedup":
+            ths = sorted(sub["threads"].unique())
+            ax.plot(ths, ths, "k:", alpha=0.4, label="Идеал")
+        ax.set_xticks(sorted(sub["threads"].unique()))
+        ax.set_title(f"{title} для {size}x{size}", fontsize=12,
+                     fontweight="bold")
+        ax.set_xlabel("Количество потоков")
+        ax.set_ylabel(ylabel)
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
-    
-    plt.suptitle('Ускорение относительно последовательной версии', 
-                fontsize=14, fontweight='bold', y=1.02)
-    plt.tight_layout()
-    plt.savefig(f'{output_dir}/02_speedup_analysis.png', dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f" Создан график: {output_dir}/02_speedup_analysis.png")
+    return fig
 
-def plot_throughput(df, output_dir='plots'):
-    """График 3: Пропускная способность (MPix/s)"""
-    os.makedirs(output_dir, exist_ok=True)
-    
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    axes = axes.flatten()
-    
-    sizes = sorted(df['size'].unique())
-    strategies = ['pixel', 'row', 'col', 'tile']
-    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A']
-    
-    for idx, size in enumerate(sizes):
-        if idx >= 4:
-            break
-        ax = axes[idx]
-        subset = df[df['size'] == size]
-        
-        throughput_data = []
-        for strategy in strategies:
-            strat_subset = subset[subset['mode'] == strategy]
-            for threads in sorted(strat_subset['threads'].unique()):
-                time_val = strat_subset[strat_subset['threads'] == threads]['time_sec'].mean()
-                if not pd.isna(time_val) and time_val > 0:
-                    pixels = subset['total_pixels'].iloc[0]
-                    throughput = (pixels / time_val) / 1e6  # MPix/s
-                    throughput_data.append({
-                        'strategy': strategy,
-                        'threads': threads,
-                        'throughput': throughput
-                    })
-        
-        if throughput_data:
-            throughput_df = pd.DataFrame(throughput_data)
-            
-            for strategy in strategies:
-                strat_data = throughput_df[throughput_df['strategy'] == strategy]
-                color = colors[strategies.index(strategy)]
-                ax.plot(strat_data['threads'], strat_data['throughput'], 
-                       marker='s', label=strategy.capitalize(), linewidth=2, color=color)
-        
-        ax.set_title(f'Пропускная способность для {size}', fontsize=12, fontweight='bold')
-        ax.set_xlabel('Количество потоков')
-        ax.set_ylabel('Пропускная способность (MPix/s)')
-        ax.set_xticks([1, 2, 4, 8])
+
+def plot_speedup(df, base_fs, out_dir):
+    """02: ускорение относительно последовательной версии."""
+    fig = lines_by_size(
+        df, base_fs, out_dir, "02", "Ускорение", "speedup", "Ускорение (раз)",
+        ref_lines=[(1, "gray", "--", "Без ускорения")])
+    save(fig, out_dir, "02_speedup_analysis.png",
+         f"Ускорение относительно последовательной версии "
+         f"(фильтр {base_fs}x{base_fs})")
+
+
+def plot_efficiency(df, base_fs, out_dir):
+    """03: эффективность = ускорение / потоки * 100%."""
+    fig = lines_by_size(
+        df, base_fs, out_dir, "03", "Эффективность", "efficiency",
+        "Эффективность (%)", min_threads=2,
+        ref_lines=[(100, "green", "--", "Идеальная (100%)"),
+                   (50, "orange", ":", "50% эффективность")])
+    save(fig, out_dir, "03_efficiency.png",
+         "Эффективность параллелизации (Speedup / Threads × 100%)")
+
+
+def plot_filter_size(df, threads, out_dir):
+    """04: ускорение в зависимости от размера фильтра при threads потоках."""
+    sizes = sorted(df["size"].unique())
+    fig, axes = size_grid(sizes)
+    for ax, size in zip(axes, sizes):
+        sub = df[(df["size"] == size) & (df["threads"] == threads) &
+                 (df["mode"] != "seq")]
+        for s in STRATEGIES:
+            d = sub[sub["mode"] == s].sort_values("filter_size")
+            ax.plot(d["filter_size"], d["speedup"], marker="o", linewidth=2,
+                    color=COLORS[s], label=LABELS[s])
+        ax.axhline(1, color="gray", ls="--", alpha=0.5, label="Без ускорения")
+        ax.set_xticks(sorted(sub["filter_size"].unique()))
+        ax.set_xticklabels([f"{k}x{k}" for k in
+                            sorted(sub["filter_size"].unique())])
+        ax.set_title(f"Размер фильтра, {size}x{size}", fontsize=12,
+                     fontweight="bold")
+        ax.set_xlabel("Размер фильтра")
+        ax.set_ylabel("Ускорение (раз)")
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
-    
-    plt.suptitle('Пропускная способность обработки изображений', 
-                fontsize=14, fontweight='bold', y=1.02)
-    plt.tight_layout()
-    plt.savefig(f'{output_dir}/03_throughput.png', dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"Создан график: {output_dir}/03_throughput.png")
+    save(fig, out_dir, "04_filter_size_speedup.png",
+         f"Ускорение в зависимости от размера фильтра ({threads} потоков)")
 
-def plot_average_times(df, output_dir='plots'):
-    """График 4: Среднее время для каждой стратегии"""
-    os.makedirs(output_dir, exist_ok=True)
-    
-    avg_df = df.groupby(['size', 'mode'])['time_sec'].mean().reset_index()
-    
-    plt.figure(figsize=(12, 6))
-    
-    x = np.arange(len(avg_df['size'].unique()))
-    width = 0.2
-    
-    strategies = ['pixel', 'row', 'col', 'tile']
-    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A']
-    
-    for i, strategy in enumerate(strategies):
-        strat_data = avg_df[avg_df['mode'] == strategy]['time_sec'].values * 1000  # в мс
-        plt.bar(x + i*width, strat_data, width, label=strategy.capitalize(), 
-               color=colors[i], alpha=0.8, edgecolor='black')
-    
-    plt.xlabel('Размер изображения', fontsize=12)
-    plt.ylabel('Среднее время (мс)', fontsize=12)
-    plt.title('Среднее время выполнения для разных стратегий', fontsize=14, fontweight='bold')
-    plt.xticks(x + width*1.5, avg_df['size'].unique(), rotation=0)
-    plt.legend()
-    plt.grid(axis='y', alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(f'{output_dir}/04_average_times.png', dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"Создан график: {output_dir}/04_average_times.png")
 
-def plot_efficiency(df, output_dir='plots'):
-    """График 5: Эффективность параллелизации"""
-    os.makedirs(output_dir, exist_ok=True)
-    
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    axes = axes.flatten()
-    
-    sizes = sorted(df['size'].unique())
-    strategies = ['pixel', 'row', 'col', 'tile']
-    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A']
-    
-    for idx, size in enumerate(sizes):
-        if idx >= 4:
-            break
-        ax = axes[idx]
-        subset = df[df['size'] == size]
-        
-        best_1thread = subset[subset['threads'] == 1]['time_sec'].min()
-        
-        if pd.isna(best_1thread) or best_1thread == 0:
-            continue
-        
-        efficiency_data = []
-        for strategy in strategies:
-            strat_subset = subset[subset['mode'] == strategy]
-            for threads in [2, 4, 8]:
-                time_val = strat_subset[strat_subset['threads'] == threads]['time_sec'].mean()
-                if not pd.isna(time_val) and time_val > 0:
-                    speedup = best_1thread / time_val
-                    efficiency = (speedup / threads) * 100  # в процентах
-                    efficiency_data.append({
-                        'strategy': strategy,
-                        'threads': threads,
-                        'efficiency': efficiency
-                    })
-        
-        if efficiency_data:
-            eff_df = pd.DataFrame(efficiency_data)
-            
-            for strategy in strategies:
-                strat_data = eff_df[eff_df['strategy'] == strategy]
-                color = colors[strategies.index(strategy)]
-                ax.plot(strat_data['threads'], strat_data['efficiency'], 
-                       marker='o', label=strategy.capitalize(), linewidth=2, color=color)
-        
-        ax.axhline(y=100, color='green', linestyle='--', alpha=0.5, label='Идеальная (100%)')
-        ax.axhline(y=50, color='orange', linestyle=':', alpha=0.5, label='50% эффективность')
-        ax.set_title(f'Эффективность для {size}', fontsize=12, fontweight='bold')
-        ax.set_xlabel('Количество потоков')
-        ax.set_ylabel('Эффективность (%)')
-        ax.set_xticks([2, 4, 8])
-        ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.3)
-    
-    plt.suptitle('Эффективность параллелизации (Speedup / Threads × 100%)', 
-                fontsize=14, fontweight='bold', y=1.02)
-    plt.tight_layout()
-    plt.savefig(f'{output_dir}/05_efficiency.png', dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"Создан график: {output_dir}/05_efficiency.png")
+def plot_tiles(df, out_dir):
+    """05: форма и размер плитки (эксперимент tiles)."""
+    d = df[(df["experiment"] == "tiles") & (df["mode"] == "tile")]
+    if d.empty:
+        return
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    for tile, g in d.groupby("tile", sort=False):
+        g = g.sort_values("threads")
+        ax.plot(g["threads"], g["speedup"], marker="o", label=tile)
+    ths = sorted(d["threads"].unique())
+    ax.plot(ths, ths, "k:", alpha=0.4, label="Идеал")
+    ax.set_xticks(ths)
+    ax.set_xlabel("Количество потоков")
+    ax.set_ylabel("Ускорение (раз)")
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8)
+    size = int(d["size"].iloc[0])
+    save(fig, out_dir, "05_tiles.png",
+         f"Влияние формы и размера плитки ({size}x{size})")
 
-def generate_summary_table(df):
-    """Генерация сводной таблицы"""
-    print("\n" + "="*80)
-    print("СВОДНАЯ ТАБЛИЦА РЕЗУЛЬТАТОВ")
-    print("="*80)
-    
-    sizes = sorted(df['size'].unique())
-    strategies = ['pixel', 'row', 'col', 'tile']
-    
-    for size in sizes:
-        print(f"\nРазмер: {size}")
-        print("-" * 80)
-        print(f"{'Стратегия':<10} {'Среднее время (мс)':<20} {'Ускорение':<15} {'Эффективность':<15}")
-        print("-" * 80)
-        
-        subset = df[df['size'] == size]
-        seq_time = subset[(subset['mode'] == 'seq') & (subset['threads'] == 1)]['time_sec'].mean()
-        
-        for strategy in strategies:
-            strat_subset = subset[subset['mode'] == strategy]
-            best_time = strat_subset[strat_subset['threads'] == 8]['time_sec'].mean()
-            
-            if pd.isna(best_time) or best_time == 0 or pd.isna(seq_time) or seq_time == 0:
+
+def md(rows, header):
+    lines = ["| " + " | ".join(header) + " |",
+             "|" + "---|" * len(header)]
+    lines += ["| " + " | ".join(str(c) for c in r) + " |" for r in rows]
+    return "\n".join(lines)
+
+
+def summary(df, base_fs, threads, out_dir):
+    out = ["# Сводка бенчмарка\n"]
+    d = df[df["experiment"] == "strategies"]
+    for size in sorted(d["size"].unique()):
+        out.append(f"\n## {size}x{size}, фильтр {base_fs}x{base_fs}, "
+                   f"{threads} потоков\n")
+        sub = d[(d["size"] == size) & (d["filter_size"] == base_fs)]
+        seq = sub[sub["mode"] == "seq"]["median_sec"].mean()
+        rows = [("seq", f"{seq * 1000:.2f}", "1.00", "-")]
+        for s in STRATEGIES:
+            r = sub[(sub["mode"] == s) & (sub["threads"] == threads)]
+            if r.empty:
                 continue
-                
-            speedup = seq_time / best_time
-            efficiency = (speedup / 8) * 100
-            
-            print(f"{strategy:<10} {best_time*1000:<20.2f} {speedup:<15.2f} {efficiency:<15.1f}%")
+            r = r.iloc[0]
+            rows.append((s, f"{r.median_sec * 1000:.2f}",
+                         f"{r.speedup:.2f}", f"{r.efficiency:.0f}%"))
+        out.append(md(rows, ["стратегия", "время, мс", "ускорение",
+                             "эффективность"]))
+
+    out.append(f"\n## Ускорение от размера фильтра ({threads} потоков)\n")
+    rows = []
+    for size in sorted(d["size"].unique()):
+        for s in STRATEGIES:
+            cells = []
+            for k in sorted(d["filter_size"].unique()):
+                r = d[(d["size"] == size) & (d["mode"] == s) &
+                      (d["threads"] == threads) & (d["filter_size"] == k)]
+                cells.append(f"{r.iloc[0].speedup:.2f}" if len(r) else "-")
+            rows.append((f"{size}x{size}", s, *cells))
+    ks = [f"{k}x{k}" for k in sorted(d["filter_size"].unique())]
+    out.append(md(rows, ["размер", "стратегия", *ks]))
+
+    t = df[(df["experiment"] == "tiles") & (df["mode"] == "tile") &
+           (df["threads"] == threads)]
+    if not t.empty:
+        out.append(f"\n## Плитки ({threads} потоков)\n")
+        rows = [(r.tile, f"{r.median_sec * 1000:.2f}", f"{r.speedup:.2f}")
+                for r in t.itertuples()]
+        out.append(md(rows, ["плитка", "время, мс", "ускорение"]))
+
+    path = os.path.join(out_dir, "summary.md")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(out) + "\n")
+    print("Создана сводка:", path)
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Использование: python plot_advanced.py <results.csv> [output_dir]")
-        sys.exit(1)
-    
-    csv_file = sys.argv[1]
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else 'plots'
-    
-    print("Загрузка данных...")
-    df = load_data(csv_file)
-    
-    print("Генерация графиков...")
-    plot_strategy_comparison(df, output_dir)
-    plot_speedup_vs_sequential(df, output_dir)
-    plot_throughput(df, output_dir)
-    plot_average_times(df, output_dir)
-    plot_efficiency(df, output_dir)
-    
-    print("\nГенерация сводной таблицы и выводов...")
-    generate_summary_table(df)
-    
-    print(f"\nВсе графики сохранены в папке: {output_dir}/")
-    print("="*80)
+        print(__doc__)
+        return 1
+    out_dir = sys.argv[2] if len(sys.argv) > 2 else "benchmarks"
+    os.makedirs(out_dir, exist_ok=True)
+    df = load_data(sys.argv[1])
+    strat = df[df["experiment"] == "strategies"]
+    threads = int(sys.argv[3]) if len(sys.argv) > 3 else int(
+        strat["threads"].max())
+    base_fs = int(strat["filter_size"].min())
 
-if __name__ == '__main__':
-    main()
+    plot_strategy_comparison(strat, base_fs, threads, out_dir)
+    plot_speedup(strat, base_fs, out_dir)
+    plot_efficiency(strat, base_fs, out_dir)
+    plot_filter_size(strat, threads, out_dir)
+    plot_tiles(df, out_dir)
+    summary(df, base_fs, threads, out_dir)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

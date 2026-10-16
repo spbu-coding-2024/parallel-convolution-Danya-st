@@ -1,8 +1,6 @@
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
-#include <time.h>
 
 #include "stb_image.h"
 #include "stb_image_write.h"
@@ -62,7 +60,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  clock_t start_time = clock();
+  double start_time = omp_get_wtime();
   switch (mode) {
   case MODE_PIXEL:
     pixel_convolution(src, result, w, h, &filter);
@@ -79,8 +77,7 @@ int main(int argc, char *argv[]) {
   default:
     seq_convolution(src, result, w, h, &filter);
   }
-  clock_t end_time = clock();
-  double elapsed = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+  double elapsed = omp_get_wtime() - start_time;
   printf("время выполнения: %4f sec\n", elapsed);
 
   stbi_write_png(argv[2], w, h, 1, result, w);

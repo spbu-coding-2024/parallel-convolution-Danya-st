@@ -55,10 +55,11 @@ static Filter make_random_filter(int size) {
   return f;
 }
 
-static int test_parallel_vs_seq(void (*par_func)(unsigned char *,
-                                                 unsigned char *, int, int,
-                                                 const Filter *f),
-                                int w, int h, int filter_size) {
+typedef void (*ConvFunc)(const unsigned char *, unsigned char *, int, int,
+                         const Filter *);
+
+static int test_parallel_vs_seq(ConvFunc par_func, int w, int h,
+                                int filter_size) {
   unsigned char *src = make_random_image(w, h);
   unsigned char *ref = calloc((size_t)w * h, 1);
   unsigned char *par = malloc((size_t)w * h);
@@ -83,11 +84,11 @@ static int test_parallel_vs_seq(void (*par_func)(unsigned char *,
   free(ref);
   free(par);
   return pass;
-  }
+}
 
 static int test_parallel_all(ConvFunc par_func) {
-  const int sizes[][2] = {{64, 64}, {128, 128}, {256, 256}, {97, 61},
-                          {33, 131}};
+  const int sizes[][2] = {
+      {64, 64}, {128, 128}, {256, 256}, {97, 61}, {33, 131}};
   const int filter_sizes[] = {3, 5, 9};
   for (int s = 0; s < 5; ++s)
     for (int k = 0; k < 3; ++k)
@@ -221,19 +222,15 @@ static int test_parallel_pixel() {
 }
 
 // Test 7
-static int test_parallel_row() {
-  return test_parallel_all(row_convolution);
-}
+static int test_parallel_row() { return test_parallel_all(row_convolution); }
 
 // Test 8
-static int test_parallel_col() {
-  return test_parallel_all(column_convolution);
-}
+static int test_parallel_col() { return test_parallel_all(column_convolution); }
 
 // Test 9
 static int test_parallel_tile() {
   const int w = 97, h = 61;
-  const int tiles[][2] = {{1, 1},   {7, 13},  {8, 8},  {32, 32}, {16, 256},
+  const int tiles[][2] = {{1, 1},    {7, 13},      {8, 8}, {32, 32}, {16, 256},
                           {256, 16}, {1000, 1000}, {0, 0}, {-5, 3}};
   unsigned char *src = make_random_image(w, h);
   unsigned char *ref = calloc(w * h, 1);
