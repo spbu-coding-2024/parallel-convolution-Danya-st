@@ -1,3 +1,4 @@
+#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,7 +19,6 @@ static inline unsigned char *make_random_image(int w, int h) {
   return img;
 }
 
-// ИСПРАВЛЕНО: сравнение точное (раньше допускалась разница в 1).
 static inline int images_equal(const unsigned char *a, const unsigned char *b,
                                int w, int h) {
   for (int i = 0; i < w * h; ++i)
@@ -45,58 +45,56 @@ static Filter make_filter(int size) {
   return f;
 }
 
-static int images_equal(const unsigned char *a, const unsigned char *b, int w,
-                        int h) {
-  for (int i = 0; i < w * h; ++i)
-    if (abs((int)a[i] - (int)b[i]) > 1)
-      return 0;
-  return 1;
-}
-
-static int image_is_constant(const unsigned char *img, int w, int h,
-                             unsigned char value) {
-  for (int i = 0; i < w * h; ++i)
-    if (img[i] != value)
-      return 0;
-  return 1;
+static Filter make_random_filter(int size) {
+  Filter f = make_filter(size);
+  for (int i = 0; i < size; ++i)
+    for (int j = 0; j < size; ++j)
+      f.kernel[i][j] = (rand() % 21 - 10) / 10.0; // от -1.0 до 1.0
+  f.factor = 0.5 + (rand() % 100) / 100.0;
+  f.bias = rand() % 41 - 20;
+  return f;
 }
 
 static int test_parallel_vs_seq(void (*par_func)(unsigned char *,
                                                  unsigned char *, int, int,
-                                                 double[3][3]),
-                                const char *name, int w, int h) {
+                                                 const Filter *f),
+                                int w, int h, int filter_size) {
   unsigned char *src = make_random_image(w, h);
-  unsigned char *ref = calloc(w * h, 1);
-  unsigned char *par = calloc(w * h, 1);
+  unsigned char *ref = calloc((size_t)w * h, 1);
+  unsigned char *par = malloc((size_t)w * h);
   if (!src || !ref || !par) {
     free(src);
     free(ref);
     free(par);
     return 0;
   }
+  memset(par, 0xA5, (size_t)w * h);
 
-  double kernel[FILTER_HEIGHT][FILTER_WIDTH];
-  for (int i = 0; i < FILTER_HEIGHT; ++i)
-    for (int j = 0; j < FILTER_WIDTH; ++j)
-      kernel[i][j] = (rand() % 21 - 10) / 10.0; // от -1.0 до 1.0
-
-  double sf = factor, sb = bias;
-  factor = 1.0;
-  bias = 0.0;
-
-  seq_convolution(src, ref, w, h, kernel);
-
-  par_func(src, par, w, h, kernel);
-
-  factor = sf;
-  bias = sb;
+  Filter f = make_random_filter(filter_size);
+  seq_convolution(src, ref, w, h, &f);
+  par_func(src, par, w, h, &f);
 
   int pass = images_equal(ref, par, w, h);
+  if (!pass)
+    fprintf(stderr, "  расхождение: %dx%d, фильтр %dx%d\n", w, h, filter_size,
+            filter_size);
 
   free(src);
   free(ref);
   free(par);
   return pass;
+  }
+
+static int test_parallel_all(ConvFunc par_func) {
+  const int sizes[][2] = {{64, 64}, {128, 128}, {256, 256}, {97, 61},
+                          {33, 131}};
+  const int filter_sizes[] = {3, 5, 9};
+  for (int s = 0; s < 5; ++s)
+    for (int k = 0; k < 3; ++k)
+      if (!test_parallel_vs_seq(par_func, sizes[s][0], sizes[s][1],
+                                filter_sizes[k]))
+        return 0;
+  return 1;
 }
 
 // Test 1
@@ -219,22 +217,24 @@ static int test_golden() {
 
 // Test 6
 static int test_parallel_pixel() {
-  return test_parallel_vs_seq(pixel_convolution, "pixel", 128, 128);
+  return test_parallel_all(pixel_convolution);
 }
 
 // Test 7
 static int test_parallel_row() {
-  return test_parallel_vs_seq(row_convolution, "row", 128, 128);
+  return test_parallel_all(row_convolution);
 }
 
 // Test 8
 static int test_parallel_col() {
-  return test_parallel_vs_seq(column_convolution, "col", 128, 128);
+  return test_parallel_all(column_convolution);
 }
 
 // Test 9
 static int test_parallel_tile() {
-  const int w = 128, h = 128;
+  const int w = 97, h = 61;
+  const int tiles[][2] = {{1, 1},   {7, 13},  {8, 8},  {32, 32}, {16, 256},
+                          {256, 16}, {1000, 1000}, {0, 0}, {-5, 3}};
   unsigned char *src = make_random_image(w, h);
   unsigned char *ref = calloc(w * h, 1);
   unsigned char *par = calloc(w * h, 1);
@@ -245,42 +245,22 @@ static int test_parallel_tile() {
     return 0;
   }
 
-  double kernel[FILTER_HEIGHT][FILTER_WIDTH];
-  for (int i = 0; i < FILTER_HEIGHT; ++i)
-    for (int j = 0; j < FILTER_WIDTH; ++j)
-      kernel[i][j] = (rand() % 21 - 10) / 10.0;
+  Filter f = make_random_filter(5);
+  seq_convolution(src, ref, w, h, &f);
 
-  double sf = factor, sb = bias;
-  factor = 1.0;
-  bias = 0.0;
-
-  seq_convolution(src, ref, w, h, kernel);
-  tile_convolution(src, par, w, h, 32, 32, kernel); // тайлы 32×32
-
-  factor = sf;
-  bias = sb;
-
-  int pass = images_equal(ref, par, w, h);
+  int pass = 1;
+  for (int t = 0; t < 9 && pass; ++t) {
+    memset(par, 0xA5, w * h);
+    tile_convolution(src, par, w, h, tiles[t][0], tiles[t][1], &f);
+    pass = images_equal(ref, par, w, h);
+    if (!pass)
+      fprintf(stderr, "  плитка %dx%d\n", tiles[t][0], tiles[t][1]);
+  }
 
   free(src);
   free(ref);
   free(par);
   return pass;
-}
-
-// Test 10
-static int test_parallel_sizes() {
-  int sizes[] = {64, 128, 256};
-  int all_pass = 1;
-
-  for (int s = 0; s < 3; ++s) {
-    int w = sizes[s], h = sizes[s];
-    if (!test_parallel_vs_seq(row_convolution, "row-size", w, h)) {
-      all_pass = 0;
-      break;
-    }
-  }
-  return all_pass;
 }
 
 int main() {
@@ -309,7 +289,6 @@ int main() {
   RUN_TEST(test_parallel_row, 7);
   RUN_TEST(test_parallel_col, 8);
   RUN_TEST(test_parallel_tile, 9);
-  RUN_TEST(test_parallel_sizes, 10);
 
   printf("\nResult: %d/%d tests passed\n", passed, total);
   return (passed == total) ? EXIT_SUCCESS : EXIT_FAILURE;
