@@ -12,8 +12,8 @@
 
 #define MAX_ITEMS 32
 
-double bench_once(unsigned char *s, unsigned char *r, int w, int h,
-                  Filter *f, ParallelMode mode, int tile_w,
+double bench_once(const unsigned char *s, unsigned char *r, int w, int h,
+                  const Filter *f, ParallelMode mode, int tile_w,
                   int tile_h) {
   double t0 = omp_get_wtime();
   switch (mode) {
