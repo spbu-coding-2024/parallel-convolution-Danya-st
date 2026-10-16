@@ -37,6 +37,11 @@ double bench_once(unsigned char *s, unsigned char *r, int w, int h,
   return (t1 - t0);
 }
 
+static int cmp_double(const void *a, const void *b) {
+  double x = *(const double *)a, y = *(const double *)b;
+  return (x > y) - (x < y);
+}
+
 double bench_median(const unsigned char *s, unsigned char *r, int w, int h,
                     const Filter *f, ParallelMode mode, int tw, int th,
                     double *min_out, double *mean_out) {
@@ -60,11 +65,6 @@ double bench_median(const unsigned char *s, unsigned char *r, int w, int h,
 const char *mode_name(ParallelMode m) {
   static const char *names[] = {"seq", "pixel", "row", "col", "tile"};
   return names[m];
-}
-
-static int cmp_double(const void *a, const void *b) {
-  double x = *(const double *)a, y = *(const double *)b;
-  return (x > y) - (x < y);
 }
 
 static int run_case(FILE *csv, const char *experiment, int size,

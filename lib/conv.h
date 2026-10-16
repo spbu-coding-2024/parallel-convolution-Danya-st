@@ -13,19 +13,21 @@ typedef enum {
   MODE_TILE
 } ParallelMode;
 
-unsigned char clamp(double value, const Filter *f);
+void seq_convolution(const unsigned char *src, unsigned char *result, int w, int h,
+                     const Filter *f);
 
-void seq_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                     Filter *f);
-
-void pixel_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                       Filter *f);
+void pixel_convolution(const unsigned char *src, unsigned char *result, int w, int h,
+                       const Filter *f);
             
-void column_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                        Filter *f);
+void column_convolution(const unsigned char *src, unsigned char *result, int w, int h,
+                        const Filter *f);
 
-void row_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                     Filter *f);
+void row_convolution(const unsigned char *src, unsigned char *result, int w, int h,
+                     const Filter *f);
 
-void tile_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                      int TILE_W, int TILE_H, Filter *f);
+void tile_convolution(const unsigned char *src, unsigned char *result, int w, int h,
+                      int TILE_W, int TILE_H, const Filter *f);
+
+int conv_built_with_openmp(void);
+
+#endif

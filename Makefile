@@ -1,6 +1,9 @@
 CC      := gcc
-CFLAGS  := -std=c99 -O2 -Wall -Wextra -Ilib
-LDFLAGS := -lm -lpng 
+# -ffp-contract=off - одинаковые результаты вычислений с плавающей точкой во
+# всех сборках (нужно для побитового сравнения с эталоном).
+CFLAGS  := -std=c99 -O2 -Wall -Wextra -Werror=unknown-pragmas -fopenmp \
+           -Ilib -D_POSIX_C_SOURCE=200809L -ffp-contract=off -MMD -MP
+LDFLAGS := -lm -fopenmp
 
 # Пути
 SRC_DIR     := src
@@ -8,50 +11,111 @@ TESTS_DIR   := tests
 INPUT_DIR   := input
 OUTPUT_DIR  := output
 BUILD_DIR   := build
-
+OBJ_DIR     := $(BUILD_DIR)/obj
+DATA_DIR    := benchmark_data
+PLOTS_DIR   := benchmarks
 
 TARGET      := $(BUILD_DIR)/convolution_seq
 TEST_TARGET := $(BUILD_DIR)/property_tests
+BENCH_BIN   := $(BUILD_DIR)/bench
 
-MAIN_SRC    := $(SRC_DIR)/main.c
-TEST_SRCS   := $(wildcard $(TESTS_DIR)/*.c)
 
-.PHONY: all clean run test dirs
+LIB_OBJS    := $(OBJ_DIR)/conv.o $(OBJ_DIR)/stb_impl.o
+MAIN_OBJS   := $(OBJ_DIR)/main.o $(LIB_OBJS)
+TEST_OBJS   := $(OBJ_DIR)/property_tests.o $(LIB_OBJS)
+BENCH_OBJS  := $(OBJ_DIR)/bench.o $(LIB_OBJS)
+
+FORMAT_FILES := $(wildcard $(SRC_DIR)/*.c $(TESTS_DIR)/*.c $(TESTS_DIR)/*.h) \
+                lib/conv.c lib/conv.h lib/filters.h
+
+.PHONY: all clean run test sanitize dirs format format-check help \
+        bench bench-run plot
 
 all: dirs $(TARGET)
 
-$(TARGET): $(MAIN_SRC) | dirs
-	@mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+$(TARGET): $(MAIN_OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS)
 
-$(TEST_TARGET): $(TEST_SRCS) $(MAIN_SRC) | dirs
-	@mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DTEST_MODE -o $@ $(TEST_SRCS) $(LDFLAGS)
+$(TEST_TARGET): $(TEST_OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+$(BENCH_BIN): $(BENCH_OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | dirs
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(OBJ_DIR)/%.o: $(TESTS_DIR)/%.c | dirs
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(OBJ_DIR)/conv.o: lib/conv.c | dirs
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# Сторонний код stb собираем без предупреждений.
+$(OBJ_DIR)/stb_impl.o: lib/stb_impl.c | dirs
+	$(CC) -std=c99 -O2 -w -Ilib -MMD -MP -c -o $@ $<
 
 dirs:
-	@mkdir -p $(BUILD_DIR) $(OUTPUT_DIR)
+	@mkdir -p $(OBJ_DIR) $(OUTPUT_DIR)
 
 run: $(TARGET)
-	./$(TARGET) $(INPUT_DIR)/tiger.png $(OUTPUT_DIR)/result.png
+	./$(TARGET) $(INPUT_DIR)/tiger.png $(OUTPUT_DIR)/result.png \
+		--filter=gaussian3 --parallel=row
 
-test: $(TEST_TARGET) | dirs
+# Тесты (флаг --seed=N воспроизводит прогон: make test TEST_ARGS=--seed=42).
+test: $(TEST_TARGET)
 	@echo "Запуск property-тестов..."
-	@./$(TEST_TARGET) --input-dir $(INPUT_DIR) --output-dir $(OUTPUT_DIR)
+	@./$(TEST_TARGET) $(TEST_ARGS)
 
+# Тесты под AddressSanitizer + UBSan (память, UB). ThreadSanitizer здесь
+# не используется: libgomp не инструментирована, и TSan засыпает отчёт
+# ложными срабатываниями на барьерах OpenMP.
+sanitize:
+	@mkdir -p $(BUILD_DIR)
+	$(CC) -std=c99 -O1 -g -Wall -Wextra -fopenmp -fsanitize=address,undefined \
+		-fno-omit-frame-pointer -Ilib -D_POSIX_C_SOURCE=200809L \
+		-ffp-contract=off -o $(BUILD_DIR)/property_tests_asan \
+		$(TESTS_DIR)/property_tests.c lib/conv.c lib/stb_impl.c -lm
+	./$(BUILD_DIR)/property_tests_asan $(TEST_ARGS)
 
-clean:
-	rm -rf $(BUILD_DIR) $(OUTPUT_DIR)/*.png
+# ---- Бенчмарк (ИСПРАВЛЕНО: теперь воспроизводим из этого же репозитория) ----
+# Раньше графики строились кодом src/bench.c, которого в репозитории этой
+# задачи не было, и скрипта построения графиков тоже не было.
+bench-run: $(BENCH_BIN)
+	@mkdir -p $(DATA_DIR)
+	./$(BENCH_BIN) $(INPUT_DIR)/tiger.png --csv=$(DATA_DIR)/results.csv \
+		$(BENCH_ARGS)
+
+plot:
+	@command -v python3 >/dev/null 2>&1 || { echo "Python3 required for plotting"; exit 1; }
+	@python3 scripts/plot.py $(DATA_DIR)/results.csv $(PLOTS_DIR)
+
+bench: bench-run plot
+	@echo "Бенчмарк завершён. Графики: $(PLOTS_DIR)/, таблица: $(PLOTS_DIR)/summary.md"
 
 format-check:
 	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found"; exit 0; }
-	@clang-format --dry-run --Werror src/*.c  tests/*.c 2>/dev/null || \
+	@clang-format --dry-run --Werror $(FORMAT_FILES) 2>/dev/null || \
 	(echo "Code formatting check failed. Run 'make format' to fix." && exit 1)
+
+# ИСПРАВЛЕНО: сообщение format-check ссылалось на несуществующую цель format.
+format:
+	@clang-format -i $(FORMAT_FILES)
+
+clean:
+	rm -rf $(BUILD_DIR) $(OUTPUT_DIR)/*.png
 
 help:
 	@echo "Доступные цели:"
 	@echo "  make all          # Сборка проекта"
 	@echo "  make run          # Запуск с фото по умолчанию"
-	@echo "  make test         # Запуск property-тестов"
-	@echo "  make bench        # Бенчмарк на разных размерах"
+	@echo "  make test         # Property-тесты (TEST_ARGS=--seed=N)"
+	@echo "  make sanitize     # Тесты под ASan+UBSan"
+	@echo "  make bench        # Бенчмарк + графики (BENCH_ARGS=...)"
+	@echo "  make bench-run    # Только бенчмарк -> $(DATA_DIR)/results.csv"
+	@echo "  make plot         # Только графики из CSV"
+	@echo "  make format       # Автоформатирование (clang-format)"
 	@echo "  make clean        # Очистка артефактов"
 	@echo "  make help         # Эта справка"
+
+-include $(wildcard $(OBJ_DIR)/*.d)

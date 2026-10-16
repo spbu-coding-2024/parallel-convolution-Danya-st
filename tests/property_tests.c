@@ -55,10 +55,12 @@ static Filter make_random_filter(int size) {
   return f;
 }
 
-static int test_parallel_vs_seq(void (*par_func)(unsigned char *,
-                                                 unsigned char *, int, int,
-                                                 const Filter *f),
-                                int w, int h, int filter_size) {
+typedef void (*ConvFunc)(const unsigned char *, unsigned char *, int, int,
+                         const Filter *);
+
+
+static int test_parallel_vs_seq(ConvFunc par_func, int w, int h,
+                                int filter_size) {
   unsigned char *src = make_random_image(w, h);
   unsigned char *ref = calloc((size_t)w * h, 1);
   unsigned char *par = malloc((size_t)w * h);
@@ -83,7 +85,7 @@ static int test_parallel_vs_seq(void (*par_func)(unsigned char *,
   free(ref);
   free(par);
   return pass;
-  }
+}
 
 static int test_parallel_all(ConvFunc par_func) {
   const int sizes[][2] = {{64, 64}, {128, 128}, {256, 256}, {97, 61},

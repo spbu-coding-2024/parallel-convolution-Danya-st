@@ -11,8 +11,8 @@ unsigned char clamp(double value, const Filter *f) {
   return (unsigned char)v;
 }
 
-void seq_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                     Filter *f) {
+void seq_convolution(const unsigned char *src, unsigned char *result, int w, int h,
+                     const Filter *f) {
   const int r = f->size / 2;
   for (int x = 0; x < w; ++x)
     for (int y = 0; y < h; ++y) {
@@ -27,8 +27,8 @@ void seq_convolution(unsigned char *src, unsigned char *result, int w, int h,
     }
 }
 
-void pixel_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                       Filter *f) {
+void pixel_convolution(const unsigned char *src, unsigned char *result, int w, int h,
+                       const Filter *f) {
   const long total = (long)w * h;
   const int r = f->size / 2;
 #pragma omp parallel for
@@ -46,8 +46,8 @@ void pixel_convolution(unsigned char *src, unsigned char *result, int w, int h,
   }
 }
 
-void column_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                        Filter *f) {
+void column_convolution(const unsigned char *src, unsigned char *result, int w, int h,
+                        const Filter *f) {
   const int r = f->size / 2;
 #pragma omp parallel for
   for (int x = 0; x < w; ++x)
@@ -63,8 +63,8 @@ void column_convolution(unsigned char *src, unsigned char *result, int w, int h,
     }
 }
 
-void row_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                     Filter *f) {
+void row_convolution(const unsigned char *src, unsigned char *result, int w, int h,
+                     const Filter *f) {
   const int r = f->size / 2;
 #pragma omp parallel for
   for (int y = 0; y < h; ++y)
@@ -80,8 +80,8 @@ void row_convolution(unsigned char *src, unsigned char *result, int w, int h,
     }
 }
 
-void tile_convolution(unsigned char *src, unsigned char *result, int w, int h,
-                      int TILE_W, int TILE_H, Filter *f) {
+void tile_convolution(const unsigned char *src, unsigned char *result, int w, int h,
+                      int TILE_W, int TILE_H, const Filter *f) {
 
   int tiles_x = (w + TILE_W - 1) / TILE_W;
   int tiles_y = (h + TILE_H - 1) / TILE_H;
