@@ -13,15 +13,14 @@
 #define MAX_ITEMS 32
 
 double bench_once(const unsigned char *s, unsigned char *r, int w, int h,
-                  const Filter *f, ParallelMode mode, int tile_w,
-                  int tile_h) {
+                  const Filter *f, ParallelMode mode, int tile_w, int tile_h) {
   double t0 = omp_get_wtime();
   switch (mode) {
   case MODE_SEQ:
-    seq_convolution(s, r, w, h,f);
+    seq_convolution(s, r, w, h, f);
     break;
   case MODE_PIXEL:
-    pixel_convolution(s, r, w, h,f);
+    pixel_convolution(s, r, w, h, f);
     break;
   case MODE_ROW:
     row_convolution(s, r, w, h, f);
@@ -77,8 +76,8 @@ static int run_case(FILE *csv, const char *experiment, int size,
   omp_set_num_threads(threads);
 
   double min, mean;
-  double med = bench_median(src, res, size, size, filter, mode, tw, th, &min,
-                            &mean);
+  double med =
+      bench_median(src, res, size, size, filter, mode, tw, th, &min, &mean);
   int bad = memcmp(res, ref, (size_t)size * size) != 0;
   if (bad)
     fprintf(stderr, "error: режим %s не совпал с эталоном\n", mode_name(mode));
@@ -130,7 +129,7 @@ int main(int argc, char **argv) {
   int nsizes = 4;
   const char *filter_names[] = {"gaussian3", "gaussian5", "motion9"};
   int nfilters = 3;
-  const char *tiles[] = {"8x8",    "16x16",  "32x32", "64x64",
+  const char *tiles[] = {"8x8",     "16x16",  "32x32", "64x64",
                          "128x128", "16x256", "256x16"};
   int ntiles = 7;
 
@@ -197,23 +196,23 @@ int main(int argc, char **argv) {
                          test_src, test_res, ref, MODE_SEQ, 1, 0, 0);
       for (int m = 0; m < 4; ++m)
         for (int t = 0; t < nthreads; ++t)
-          errors += run_case(csv, "strategies", size, filter_names[fi],
-                             &filter, test_src, test_res, ref, modes[m],
-                             threads[t], 32, 32);
+          errors +=
+              run_case(csv, "strategies", size, filter_names[fi], &filter,
+                       test_src, test_res, ref, modes[m], threads[t], 32, 32);
     }
 
     if (s == nsizes - 1) {
       Filter filter = get_filter(filter_names[0]);
       seq_convolution(test_src, ref, size, size, &filter);
-      errors += run_case(csv, "tiles", size, filter_names[0], &filter,
-                         test_src, test_res, ref, MODE_SEQ, 1, 0, 0);
+      errors += run_case(csv, "tiles", size, filter_names[0], &filter, test_src,
+                         test_res, ref, MODE_SEQ, 1, 0, 0);
       for (int k = 0; k < ntiles; ++k) {
         int tw, th;
         sscanf(tiles[k], "%dx%d", &tw, &th);
         for (int t = 0; t < nthreads; ++t)
-          errors += run_case(csv, "tiles", size, filter_names[0], &filter,
-                             test_src, test_res, ref, MODE_TILE, threads[t],
-                             tw, th);
+          errors +=
+              run_case(csv, "tiles", size, filter_names[0], &filter, test_src,
+                       test_res, ref, MODE_TILE, threads[t], tw, th);
       }
     }
     printf("\n");
