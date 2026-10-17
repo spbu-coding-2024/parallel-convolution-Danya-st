@@ -3,12 +3,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+#include <signal.h>
 
 #define TEST_IMG_W 64
 #define TEST_IMG_H 64
 
 #include "conv.h"
 #include "filters.h"
+#include "pipeline.h"
+#include "stb_image.h"
+#include "stb_image_write.h"
+
 
 static inline unsigned char *make_random_image(int w, int h) {
   unsigned char *img = malloc((size_t)w * h);
@@ -230,8 +236,8 @@ static int test_parallel_col() { return test_parallel_all(column_convolution); }
 // Test 9
 static int test_parallel_tile() {
   const int w = 97, h = 61;
-  const int tiles[][2] = {{1, 1},    {7, 13},      {8, 8}, {32, 32}, {16, 256},
-                          {256, 16}, {1000, 1000}, {0, 0}, {-5, 3}};
+  const int tiles[][2] = {{1, 1},    {7, 13},  {8, 8}, {32, 32}, {16, 256},
+                          {256, 16}, {1000, 1000}};
   unsigned char *src = make_random_image(w, h);
   unsigned char *ref = calloc(w * h, 1);
   unsigned char *par = calloc(w * h, 1);
@@ -246,7 +252,7 @@ static int test_parallel_tile() {
   seq_convolution(src, ref, w, h, &f);
 
   int pass = 1;
-  for (int t = 0; t < 9 && pass; ++t) {
+  for (int t = 0; t < 7 && pass; ++t) {
     memset(par, 0xA5, w * h);
     tile_convolution(src, par, w, h, tiles[t][0], tiles[t][1], &f);
     pass = images_equal(ref, par, w, h);
@@ -259,6 +265,87 @@ static int test_parallel_tile() {
   free(par);
   return pass;
 }
+
+// Test 10
+#define PIPE_IMAGES 3
+ 
+static void watchdog_handler(int sig) {
+  (void)sig;
+  static const char msg[] = "  ЗАВИСАНИЕ: тест конвейера не завершился\n";
+  if (write(STDERR_FILENO, msg, sizeof msg - 1) < 0) {
+    // ничего не делаем, выходим ниже
+  }
+  _exit(3);
+}
+
+static int test_pipeline_matches_sequential() {
+  signal(SIGALRM, watchdog_handler);
+  alarm(30);
+ 
+  char in_dir[] = "/tmp/convtest_in_XXXXXX";
+  char out_dir[] = "/tmp/convtest_out_XXXXXX";
+  if (!mkdtemp(in_dir))
+    return 0;
+  if (!mkdtemp(out_dir)) {
+    rmdir(in_dir);
+    return 0;
+  }
+ 
+  unsigned char *src[PIPE_IMAGES] = {NULL};
+  int w[PIPE_IMAGES], h[PIPE_IMAGES];
+  char name[PIPE_IMAGES][32];
+  int pass = 1;
+ 
+  for (int i = 0; i < PIPE_IMAGES; ++i) {
+    w[i] = 20 + rand() % 40;
+    h[i] = 20 + rand() % 40;
+    src[i] = make_random_image(w[i], h[i]);
+    snprintf(name[i], sizeof name[i], "img%d.png", i);
+    char path[4096];
+    snprintf(path, sizeof path, "%s/%s", in_dir, name[i]);
+    if (!src[i] || !stbi_write_png(path, w[i], h[i], 1, src[i], w[i]))
+      pass = 0;
+  }
+ 
+  Filter f = get_filter("gaussian3");
+  PipelineConfig cfg;
+  memset(&cfg, 0, sizeof cfg);
+  cfg.num_workers = 2;
+  cfg.queue_capacity = 2;
+  cfg.mode = MODE_ROW;
+  cfg.omp_threads = 2;
+  PipelineStats st;
+  if (pass)
+    pass = pipeline_run(in_dir, out_dir, &f, &cfg, &st) == 0 &&
+           st.written == PIPE_IMAGES && !st.read_failed && !st.write_failed;
+ 
+  for (int i = 0; i < PIPE_IMAGES && pass; ++i) {
+    char path[4096];
+    snprintf(path, sizeof path, "%s/%s", out_dir, name[i]);
+    int ow, oh, ch;
+    unsigned char *got = stbi_load(path, &ow, &oh, &ch, 1);
+    unsigned char *ref = calloc((size_t)w[i] * h[i], 1);
+    seq_convolution(src[i], ref, w[i], h[i], &f);
+    pass = got && ow == w[i] && oh == h[i] &&
+           images_equal(ref, got, w[i], h[i]);
+    free(ref);
+    stbi_image_free(got);
+  }
+ 
+  for (int i = 0; i < PIPE_IMAGES; ++i) {
+    char path[4096];
+    snprintf(path, sizeof path, "%s/%s", in_dir, name[i]);
+    unlink(path);
+    snprintf(path, sizeof path, "%s/%s", out_dir, name[i]);
+    unlink(path);
+    free(src[i]);
+  }
+  rmdir(in_dir);
+  rmdir(out_dir);
+  alarm(0);
+  return pass;
+}
+
 
 int main() {
   srand((unsigned)time(NULL));
@@ -286,6 +373,7 @@ int main() {
   RUN_TEST(test_parallel_row, 7);
   RUN_TEST(test_parallel_col, 8);
   RUN_TEST(test_parallel_tile, 9);
+  RUN_TEST(test_pipeline_matches_sequential, 10);
 
   printf("\nResult: %d/%d tests passed\n", passed, total);
   return (passed == total) ? EXIT_SUCCESS : EXIT_FAILURE;

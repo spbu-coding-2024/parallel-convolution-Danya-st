@@ -11,32 +11,6 @@
 #include "filters.h"
 #include "pipeline.h"
 
-/*
- * Бенчмарк конвейера (вместо одного запуска на точку - вся серия в одном
- * процессе).
- *
- * ИСПРАВЛЕНО (задача 3, "Методика бенчмарка конвейера"):
- *  - раньше КАЖДАЯ точка (workers x mode) запускала отдельный процесс,
- *    который заново считал baseline, поэтому шум baseline попадал в
- *    ускорение каждой точки. Теперь один процесс измеряет baseline ОДИН раз
- *    (медиана нескольких прогонов) и все точки делятся на него;
- *  - раньше перед КАЖДЫМ прогоном все входные картинки перекодировались и
- *    копировались в /tmp, а потом удалялись через system("rm -rf"), что
- *    сильно шумело. Теперь вход читается как есть, результат пишется во
- *    временную папку, которая очищается без вызова shell;
- *  - вместо среднего - медиана; перед замерами есть прогревочный запуск;
- *  - ИСПРАВЛЕНО (дубликаты кода): свёртка, очередь, потоки и switch по
- *    режимам - общие lib/conv.c и lib/pipeline.c (раньше отдельные копии с
- *    другими константами: QUEUE_SIZE 32 против 8, MAX_PATH 512 против 1024,
- *    плитка всегда 32x32, воркеров не больше 16);
- *  - ИСПРАВЛЕНО: отсутствующая входная папка и ошибки прогона больше не
- *    вешают и не искажают замер: прогон с ошибками прерывает бенчмарк;
- *  - в CSV добавлена разбивка по стадиям (чтение / свёртка / запись) и время
- *    ожидания на очередях: по ней проверяется, что именно ограничивает
- *    ускорение (закон Амдала: ускорение ограничено самой медленной
- *    стадией).
- */
-
 #define MAX_ITEMS 32
 #define MAX_NAME 32
 #define MAX_RUNS 128
@@ -68,8 +42,7 @@ static const char *const FILTER_NAMES[] = {
     "identity", "blur3",   "gaussian3", "edge",    "sharpen3", "emboss",
     "mean",     "blur5",   "gaussian5", "edge_h5", "sharpen5", "motion9"};
 
-// get_filter молча возвращает identity для неизвестного имени, поэтому имя
-// проверяется отдельно.
+
 static int is_known_filter(const char *name) {
   for (size_t i = 0; i < sizeof FILTER_NAMES / sizeof FILTER_NAMES[0]; ++i)
     if (strcmp(name, FILTER_NAMES[i]) == 0)
@@ -109,14 +82,10 @@ static void remove_dir(const char *path) {
   rmdir(path);
 }
 
-/* Временная папка для результатов; удаляется при любом выходе из программы,
- * в том числе при ошибке внутри run_series (раньше оставался мусор в /tmp). */
 static char g_out_dir[] = "/tmp/bench_stream_XXXXXX";
 
 static void cleanup_out_dir(void) { remove_dir(g_out_dir); }
 
-/* Серия прогонов. Возвращает медиану настенного времени; *rep - статистика
- * того прогона, чьё время ближе всего к медиане (для разбивки по стадиям). */
 static double run_series(const char *in_dir, const char *out_dir,
                          const Filter *f, const PipelineConfig *cfg, int runs,
                          PipelineStats *rep) {
@@ -254,7 +223,6 @@ int main(int argc, char **argv) {
          "процессоров: %d\n",
          input_dir, filter_name, runs, omp_get_num_procs());
 
-  /* Baseline: один воркер, последовательная свёртка. Измеряется ОДИН раз. */
   PipelineConfig base_cfg;
   base_cfg.num_workers = 1;
   base_cfg.queue_capacity = queue_capacity;

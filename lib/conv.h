@@ -28,6 +28,5 @@ void row_convolution(const unsigned char *src, unsigned char *result, int w,
 void tile_convolution(const unsigned char *src, unsigned char *result, int w,
                       int h, int TILE_W, int TILE_H, const Filter *f);
 
-int conv_built_with_openmp(void);
 
 #endif

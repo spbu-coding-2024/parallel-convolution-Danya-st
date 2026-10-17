@@ -60,9 +60,6 @@ static void queue_destroy(TaskQueue *q) {
   free(q->items);
 }
 
-/* Кладёт задачу в очередь, блокируясь, пока очередь полна. Очередь не должна
- * быть закрыта (в нашем конвейере пишет в закрываемую очередь только тот
- * поток, который её закрывает, и только после последнего push). */
 static void queue_push(TaskQueue *q, ImageTask *task) {
   pthread_mutex_lock(&q->mutex);
   if (q->count == q->capacity) {
@@ -80,8 +77,6 @@ static void queue_push(TaskQueue *q, ImageTask *task) {
   pthread_mutex_unlock(&q->mutex);
 }
 
-/* Берёт задачу; блокируется, пока очередь пуста и не закрыта. NULL означает
- * "очередь закрыта и пуста". */
 static ImageTask *queue_pop(TaskQueue *q) {
   pthread_mutex_lock(&q->mutex);
   if (q->count == 0 && !q->closed) {
@@ -116,7 +111,6 @@ typedef struct {
   const Filter *filter;
   PipelineConfig cfg;
   PipelineStats stats;
-  /* защищает stats при слиянии локальных счётчиков потоков */
   pthread_mutex_t stats_mutex;
 } Pipeline;
 
@@ -181,7 +175,6 @@ static void *reader_thread(void *arg) {
     ++ok;
   }
 
-  /* Единственная точка выхода: очередь закрывается ВСЕГДА. */
   queue_close(&p->read_q);
 
   pthread_mutex_lock(&p->stats_mutex);
@@ -192,9 +185,6 @@ static void *reader_thread(void *arg) {
   return NULL;
 }
 
-/* Выбор стратегии свёртки. ИСПРАВЛЕНО: раньше такой switch был скопирован в
- * stream_main.c и bench_stream.c; теперь он один, а сама свёртка - общая из
- * lib/conv.c. */
 static void run_convolution(const Pipeline *p, const ImageTask *t,
                             unsigned char *result) {
   switch (p->cfg.mode) {
@@ -288,7 +278,6 @@ static void *writer_thread(void *arg) {
   return NULL;
 }
 
-/* Создаёт out_dir, если его нет; -1, если это невозможно. */
 static int ensure_dir(const char *path) {
   struct stat st;
   if (stat(path, &st) == 0)
