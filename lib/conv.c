@@ -82,6 +82,10 @@ void row_convolution(const unsigned char *src, unsigned char *result, int w,
 
 void tile_convolution(const unsigned char *src, unsigned char *result, int w,
                       int h, int TILE_W, int TILE_H, const Filter *f) {
+  if (TILE_W <= 0)
+    TILE_W = 32;
+  if (TILE_H <= 0)
+    TILE_H = 32;
 
   int tiles_x = (w + TILE_W - 1) / TILE_W;
   int tiles_y = (h + TILE_H - 1) / TILE_H;
