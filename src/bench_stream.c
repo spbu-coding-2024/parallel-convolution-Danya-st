@@ -39,9 +39,8 @@ static int list_parse(const char *s, List *l) {
 }
 
 static const char *const FILTER_NAMES[] = {
-    "identity", "blur3",   "gaussian3", "edge",    "sharpen3", "emboss",
-    "mean",     "blur5",   "gaussian5", "edge_h5", "sharpen5", "motion9"};
-
+    "identity", "blur3", "gaussian3", "edge",    "sharpen3", "emboss",
+    "mean",     "blur5", "gaussian5", "edge_h5", "sharpen5", "motion9"};
 
 static int is_known_filter(const char *name) {
   for (size_t i = 0; i < sizeof FILTER_NAMES / sizeof FILTER_NAMES[0]; ++i)
@@ -97,8 +96,9 @@ static double run_series(const char *in_dir, const char *out_dir,
       exit(EXIT_FAILURE);
     }
     if (all[i].written == 0 || all[i].write_failed || all[i].read_failed) {
-      fprintf(stderr, "Прогон завершился с ошибками: записано %d, "
-                      "ошибок чтения %d, ошибок записи %d\n",
+      fprintf(stderr,
+              "Прогон завершился с ошибками: записано %d, "
+              "ошибок чтения %d, ошибок записи %d\n",
               all[i].written, all[i].read_failed, all[i].write_failed);
       exit(EXIT_FAILURE);
     }
@@ -162,8 +162,7 @@ int main(int argc, char **argv) {
       if (sscanf(a + 7, "%dx%d%n", &tile_w, &tile_h, &n) != 2 ||
           a[7 + n] != '\0' || tile_w < 1 || tile_h < 1)
         rc = -1;
-    }
-    else {
+    } else {
       fprintf(stderr, "Неизвестный параметр: %s\n", a);
       usage(argv[0]);
       return EXIT_FAILURE;
@@ -250,8 +249,8 @@ int main(int argc, char **argv) {
       cfg.tile_w = tile_w;
       cfg.tile_h = tile_h;
 
-      const double t = run_series(input_dir, out_dir, &filter, &cfg, runs,
-                                  &rep);
+      const double t =
+          run_series(input_dir, out_dir, &filter, &cfg, runs, &rep);
       const double speedup = baseline / t;
       printf("workers=%-2d mode=%-5s: %.3f s, speedup x%.2f | чтение %.3f, "
              "свёртка %.3f, запись %.3f | ждут: читатель %.3f, воркеры "
@@ -261,8 +260,9 @@ int main(int argc, char **argv) {
              rep.workers_starved_sec, rep.writer_starved_sec);
       fflush(stdout);
       if (csv) {
-        fprintf(csv, "%d,%s,%d,%s,%d,%.6f,%.6f,%.4f,%.6f,%.6f,%.6f,%.6f,"
-                     "%.6f,%.6f,%.6f,%d,%d\n",
+        fprintf(csv,
+                "%d,%s,%d,%s,%d,%.6f,%.6f,%.4f,%.6f,%.6f,%.6f,%.6f,"
+                "%.6f,%.6f,%.6f,%d,%d\n",
                 workers[w], modes_list.item[m],
                 modes[m] == MODE_SEQ ? 1 : omp_threads, filter_name,
                 rep.written, t, baseline, speedup, rep.read_busy_sec,

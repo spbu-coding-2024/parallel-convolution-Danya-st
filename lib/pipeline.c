@@ -31,7 +31,6 @@ typedef struct {
   char name[NAME_MAX_LEN];
 } ImageTask;
 
-
 typedef struct {
   ImageTask **items;
   int capacity, head, tail, count, closed, peak;
@@ -198,8 +197,8 @@ static void run_convolution(const Pipeline *p, const ImageTask *t,
     column_convolution(t->data, result, t->w, t->h, p->filter);
     break;
   case MODE_TILE:
-    tile_convolution(t->data, result, t->w, t->h, p->cfg.tile_w,
-                     p->cfg.tile_h, p->filter);
+    tile_convolution(t->data, result, t->w, t->h, p->cfg.tile_w, p->cfg.tile_h,
+                     p->filter);
     break;
   case MODE_SEQ:
   default:
@@ -255,10 +254,10 @@ static void *writer_thread(void *arg) {
     output_name(task->name, name, sizeof name);
 
     const double t0 = cpu_now();
-    const int ok = snprintf(path, sizeof path, "%s/%s", p->out_dir, name) <
-                       (int)sizeof path &&
-                   stbi_write_png(path, task->w, task->h, 1, task->data,
-                                  task->w);
+    const int ok =
+        snprintf(path, sizeof path, "%s/%s", p->out_dir, name) <
+            (int)sizeof path &&
+        stbi_write_png(path, task->w, task->h, 1, task->data, task->w);
     busy += cpu_now() - t0;
     if (ok) {
       ++written;

@@ -1,7 +1,6 @@
 #ifndef PIPELINE_H
 #define PIPELINE_H
 
-
 #include "conv.h"
 #include "filters.h"
 
@@ -12,7 +11,6 @@ typedef struct {
   int tile_w, tile_h;
   int omp_threads;
 } PipelineConfig;
-
 
 typedef struct {
   int read_ok;

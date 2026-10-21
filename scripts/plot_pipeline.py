@@ -5,17 +5,9 @@ import sys
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-import pandas as pd  # noqa: E402
+import matplotlib.pyplot as plt
+import pandas as pd
 
-# Что изменено по сравнению со старым скриптом:
-#  - убран "import seaborn": он не использовался и не был указан в
-#    requirements.txt, поэтому скрипт падал на чистой установке;
-#  - читает новый CSV bench_stream (одна baseline на весь файл, разбивка по
-#    стадиям, простои на очередях);
-#  - потолок ускорения и узкое место считаются из измерений, а не гадаются
-#    ("ограничения в ядрах и накладные расходы" ничем не подтверждались);
-#  - добавлены график стоимости стадий и сводка pipeline_summary.md.
 try:
     plt.style.use("seaborn-v0_8-whitegrid")
 except OSError:
@@ -90,7 +82,7 @@ def plot_stages(df, out="plots/pipeline_stages.png"):
                label=f"{label}: {value:.3f} с")
         bottom += value
     # Читатель и писатель работают одновременно, поэтому нижняя граница
-    # времени прогона - самая тяжёлая ОДНОПОТОЧНАЯ стадия.
+    # времени прогона - самая тяжёлая однопоточная стадия.
     heavy = max(ref["read_busy"], ref["write_busy"])
     ax.axhline(heavy, color="red", ls="--",
                label=f"нижняя граница времени конвейера: {heavy:.3f} с "
